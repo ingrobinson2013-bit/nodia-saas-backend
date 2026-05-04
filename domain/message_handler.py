@@ -56,19 +56,23 @@ class MessageHandler:
         # ── 2. Recuperar o crear sesión ────────────────────
         session = self._get_or_create_session(db, tenant_id, sender_wa_id, sender_name)
 
-        # ── 3. Verificar bot_mode ──────────────────────────
+        # ── 3. Guardar el mensaje del usuario en el historial ─────────
+        history = session.get("history") or []
+        user_message_entry = {"role": "user", "content": message_text, "timestamp": datetime.now(timezone.utc).isoformat()}
+        
+        # ── 4. Verificar bot_mode ──────────────────────────
         # Si bot_mode=False, el agente humano tomó el control
         if not session.get("bot_mode", True):
-            logger.info(f"[{tenant['nombre']}] bot_mode=False para {sender_wa_id}. IA pausada.")
-            # TODO: notificar al panel via WebSocket
+            logger.info(f"[{tenant['nombre']}] bot_mode=False para {sender_wa_id}. IA pausada, solo se guarda el mensaje.")
+            # Actualizamos el historial solo con el mensaje del usuario para que el panel lo vea
+            self._update_session(db, session["id"], history + [user_message_entry])
             return
 
-        # ── 4. Preparar historial para OpenAI ─────────────
-        history = session.get("history") or []
-        # Recortar a últimos MAX_HISTORY turnos
+        # ── 5. Preparar historial para OpenAI ─────────────
+        # Recortar a últimos MAX_HISTORY turnos (solo para la IA)
         history_context = history[-MAX_HISTORY:]
 
-        # ── 5. Llamar a IA ────────────────────────────────
+        # ── 6. Llamar a IA ────────────────────────────────
         ai_prompt = tenant.get("ai_prompt") or None
         ai = AIService()
         response_text = await ai.get_response(
@@ -77,7 +81,7 @@ class MessageHandler:
             system_prompt=ai_prompt,
         )
 
-        # ── 6. Enviar respuesta por WhatsApp ───────────────
+        # ── 7. Enviar respuesta por WhatsApp ───────────────
         wa = WhatsAppService(
             phone_number_id=tenant["wa_phone_id"],
             access_token=tenant["wa_access_token"],
@@ -85,10 +89,10 @@ class MessageHandler:
         await wa.send_text(to=sender_wa_id, message=response_text)
         await wa.mark_as_read(message_id)
 
-        # ── 7. Actualizar historial en Supabase ────────────
+        # ── 8. Actualizar historial en Supabase (Usuario + IA) ────────────
         new_history = history + [
-            {"role": "user",      "content": message_text},
-            {"role": "assistant", "content": response_text},
+            user_message_entry,
+            {"role": "assistant", "content": response_text, "timestamp": datetime.now(timezone.utc).isoformat()},
         ]
         self._update_session(db, session["id"], new_history)
 
