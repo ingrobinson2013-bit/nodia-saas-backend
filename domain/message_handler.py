@@ -41,11 +41,14 @@ class MessageHandler:
         history = self._get_history(db, tenant_id, sender_wa_id)
 
         # ── 3. Llamar a IA ────────────────────────────────
+        # Cargar prompt personalizado del tenant (si existe)
+        ai_prompt = tenant.get("ai_prompt") or None
+
         ai = AIService()
         response_text = await ai.get_response(
             user_message=message_text,
             history=history,
-            system_prompt=None,  # TODO: cargar prompt personalizado del tenant
+            system_prompt=ai_prompt,  # Prompt personalizado por cliente ✅
         )
 
         # ── 4. Enviar respuesta por WhatsApp ───────────────
