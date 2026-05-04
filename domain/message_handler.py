@@ -74,11 +74,22 @@ class MessageHandler:
 
         # ── 6. Llamar a IA ────────────────────────────────
         ai_prompt = tenant.get("ai_prompt") or None
+        
+        odoo_config = None
+        if tenant.get("plan") == "pro" and tenant.get("odoo_url"):
+            odoo_config = {
+                "odoo_url": tenant.get("odoo_url"),
+                "odoo_db": tenant.get("odoo_db"),
+                "odoo_user": tenant.get("odoo_user"),
+                "odoo_api_key": tenant.get("odoo_api_key"),
+            }
+            
         ai = AIService()
         response_text = await ai.get_response(
             user_message=message_text,
             history=history_context,
             system_prompt=ai_prompt,
+            odoo_config=odoo_config
         )
 
         # ── 7. Enviar respuesta por WhatsApp ───────────────
