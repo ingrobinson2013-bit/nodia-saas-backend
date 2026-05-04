@@ -28,7 +28,7 @@ app = FastAPI(
 # ── CORS (permitir panel Next.js) ─────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://tu-panel.vercel.app"],
+    allow_origins=["*"], # Permitir todos para evitar errores si cambia el puerto local
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
