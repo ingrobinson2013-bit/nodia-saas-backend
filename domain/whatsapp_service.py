@@ -16,9 +16,9 @@ class WhatsAppService:
     """
 
     def __init__(self, phone_number_id: str, access_token: str):
-        self.phone_number_id = phone_number_id
-        self.access_token = access_token
-        self.base_url = f"{GRAPH_API_URL}/{phone_number_id}/messages"
+        self.phone_number_id = phone_number_id.strip() if phone_number_id else ""
+        self.access_token = access_token.strip() if access_token else ""
+        self.base_url = f"{GRAPH_API_URL}/{self.phone_number_id}/messages"
 
     async def send_text(self, to: str, message: str) -> dict:
         """Envía un mensaje de texto simple."""
