@@ -1,28 +1,43 @@
 # domain/message_handler.py
-# Orquestador principal: recibe mensaje → IA → responde → persiste
+# Orquestador principal — alineado con schema real de chat_sessions
+#
+# Schema chat_sessions:
+#   id, tenant_id, wa_from, history (JSONB []), estado, 
+#   cita_odoo_id, updated_at, bot_mode, name
 
 import logging
+import json
+from datetime import datetime, timezone
 from infrastructure.repositories.tenant_repo import TenantRepository
 from domain.ai_service import AIService
 from domain.whatsapp_service import WhatsAppService
 from infrastructure.database import get_supabase
 
 logger = logging.getLogger(__name__)
-
 tenant_repo = TenantRepository()
+
+MAX_HISTORY = 10  # Máximo de turnos en contexto para OpenAI
 
 
 class MessageHandler:
     """
-    Orquesta el flujo completo de un mensaje entrante de WhatsApp:
+    Flujo completo de un mensaje entrante:
     1. Identificar tenant por wa_phone_id
-    2. Recuperar/crear sesión de chat
-    3. Llamar a IA con contexto
-    4. Responder al usuario
-    5. Persistir en Supabase
+    2. Recuperar/crear sesión en chat_sessions (upsert)
+    3. Verificar bot_mode (si está pausado, solo notifica)
+    4. Llamar a IA con historial JSONB
+    5. Responder al usuario via Meta API
+    6. Actualizar historial en Supabase (JSONB append)
     """
 
-    async def handle(self, phone_number_id: str, sender_wa_id: str, message_text: str, message_id: str):
+    async def handle(
+        self,
+        phone_number_id: str,
+        sender_wa_id: str,
+        message_text: str,
+        message_id: str,
+        sender_name: str = None,
+    ):
         # ── 1. Identificar tenant ──────────────────────────
         tenant = tenant_repo.get_by_phone_id(phone_number_id)
         if not tenant:
@@ -30,28 +45,39 @@ class MessageHandler:
             return
 
         if not tenant.get("activo", False):
-            logger.info(f"Tenant {tenant['nombre']} inactivo. Mensaje ignorado.")
+            logger.info(f"Tenant {tenant['nombre']} inactivo. Ignorado.")
             return
 
         tenant_id = tenant["tenant_id"]
-        logger.info(f"[{tenant['nombre']}] Mensaje de {sender_wa_id}: {message_text[:50]}...")
+        logger.info(f"[{tenant['nombre']}] Msg de {sender_wa_id}: {message_text[:60]}...")
 
-        # ── 2. Recuperar historial de chat_sessions ────────
         db = get_supabase()
-        history = self._get_history(db, tenant_id, sender_wa_id)
 
-        # ── 3. Llamar a IA ────────────────────────────────
-        # Cargar prompt personalizado del tenant (si existe)
+        # ── 2. Recuperar o crear sesión ────────────────────
+        session = self._get_or_create_session(db, tenant_id, sender_wa_id, sender_name)
+
+        # ── 3. Verificar bot_mode ──────────────────────────
+        # Si bot_mode=False, el agente humano tomó el control
+        if not session.get("bot_mode", True):
+            logger.info(f"[{tenant['nombre']}] bot_mode=False para {sender_wa_id}. IA pausada.")
+            # TODO: notificar al panel via WebSocket
+            return
+
+        # ── 4. Preparar historial para OpenAI ─────────────
+        history = session.get("history") or []
+        # Recortar a últimos MAX_HISTORY turnos
+        history_context = history[-MAX_HISTORY:]
+
+        # ── 5. Llamar a IA ────────────────────────────────
         ai_prompt = tenant.get("ai_prompt") or None
-
         ai = AIService()
         response_text = await ai.get_response(
             user_message=message_text,
-            history=history,
-            system_prompt=ai_prompt,  # Prompt personalizado por cliente ✅
+            history=history_context,
+            system_prompt=ai_prompt,
         )
 
-        # ── 4. Enviar respuesta por WhatsApp ───────────────
+        # ── 6. Enviar respuesta por WhatsApp ───────────────
         wa = WhatsAppService(
             phone_number_id=tenant["wa_phone_id"],
             access_token=tenant["wa_access_token"],
@@ -59,38 +85,70 @@ class MessageHandler:
         await wa.send_text(to=sender_wa_id, message=response_text)
         await wa.mark_as_read(message_id)
 
-        # ── 5. Persistir conversación ──────────────────────
-        self._save_messages(db, tenant_id, sender_wa_id, message_text, response_text)
-        logger.info(f"[{tenant['nombre']}] Respuesta enviada a {sender_wa_id}")
+        # ── 7. Actualizar historial en Supabase ────────────
+        new_history = history + [
+            {"role": "user",      "content": message_text},
+            {"role": "assistant", "content": response_text},
+        ]
+        self._update_session(db, session["id"], new_history)
 
-    def _get_history(self, db, tenant_id: str, wa_id: str) -> list[dict]:
+        logger.info(f"[{tenant['nombre']}] ✅ Respuesta enviada a {sender_wa_id}")
+
+    # ──────────────────────────────────────────────────────
+    # HELPERS
+    # ──────────────────────────────────────────────────────
+
+    def _get_or_create_session(
+        self, db, tenant_id: str, wa_from: str, name: str = None
+    ) -> dict:
         """
-        Recupera el historial reciente de chat_sessions para contexto de IA.
-        Retorna lista OpenAI-compatible: [{"role": "user/assistant", "content": "..."}]
+        Busca la sesión existente o crea una nueva.
+        Usa upsert sobre la unique key (tenant_id, wa_from).
         """
         try:
             result = (
                 db.table("chat_sessions")
-                .select("role, content")
+                .select("*")
                 .eq("tenant_id", tenant_id)
-                .eq("wa_id", wa_id)
-                .order("created_at", desc=False)
-                .limit(10)
+                .eq("wa_from", wa_from)
+                .single()
                 .execute()
             )
-            return result.data or []
-        except Exception as e:
-            logger.error(f"Error cargando historial: {e}")
-            return []
+            if result.data:
+                return result.data
+        except Exception:
+            pass  # No existe aún — la creamos
 
-    def _save_messages(self, db, tenant_id: str, wa_id: str, user_msg: str, bot_msg: str):
-        """
-        Guarda el par de mensajes (user + assistant) en chat_sessions.
-        """
+        # Crear nueva sesión
         try:
-            db.table("chat_sessions").insert([
-                {"tenant_id": tenant_id, "wa_id": wa_id, "role": "user",      "content": user_msg},
-                {"tenant_id": tenant_id, "wa_id": wa_id, "role": "assistant", "content": bot_msg},
-            ]).execute()
+            result = (
+                db.table("chat_sessions")
+                .insert({
+                    "tenant_id": tenant_id,
+                    "wa_from":   wa_from,
+                    "name":      name,
+                    "history":   [],
+                    "bot_mode":  True,
+                    "estado":    "activo",
+                })
+                .execute()
+            )
+            return result.data[0]
         except Exception as e:
-            logger.error(f"Error guardando mensajes: {e}")
+            logger.error(f"Error creando sesión: {e}")
+            # Retornar sesión mínima en memoria para no bloquear el flujo
+            return {"id": None, "history": [], "bot_mode": True}
+
+    def _update_session(self, db, session_id: str, new_history: list):
+        """
+        Actualiza el historial JSONB y updated_at de la sesión.
+        """
+        if not session_id:
+            return
+        try:
+            db.table("chat_sessions").update({
+                "history":    new_history,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", session_id).execute()
+        except Exception as e:
+            logger.error(f"Error actualizando historial: {e}")
