@@ -6,6 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.webhook import router as webhook_router
+from api.send_message import router as send_message_router
 from config import settings
 
 # ── Logging ──────────────────────────────────────────────
@@ -34,6 +35,7 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────
 app.include_router(webhook_router, tags=["WhatsApp Webhook"])
+app.include_router(send_message_router, prefix="/api", tags=["Panel Agente"])
 
 
 # ── Health check ──────────────────────────────────────────
