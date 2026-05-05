@@ -37,10 +37,14 @@ class AIService:
         messages = [{"role": "system", "content": system_prompt or SYSTEM_PROMPT_DEFAULT}]
         
         # Filtrar solo 'role' y 'content' para OpenAI
+        # IMPORTANTE: mapear 'agent' → 'assistant' (OpenAI no acepta 'agent')
+        ROLE_MAP = {"agent": "assistant", "user": "user", "assistant": "assistant"}
         clean_history = []
         for msg in history[-10:]:
-            clean_msg = {"role": msg["role"], "content": msg["content"]}
-            clean_history.append(clean_msg)
+            role = ROLE_MAP.get(msg.get("role", "user"), "user")
+            content = msg.get("content", "")
+            if content:  # ignorar entradas vacías
+                clean_history.append({"role": role, "content": content})
             
         messages.extend(clean_history)
         messages.append({"role": "user", "content": user_message})
