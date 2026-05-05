@@ -66,12 +66,15 @@ class OdooService:
             logger.error(f"Error consultando disponibilidad en Odoo: {e}")
             return []
 
-    def create_appointment(self, name: str, phone: str, start_datetime: str, duration_hours: float = 1.0, description: str = "") -> bool:
+    def create_appointment(self, name: str, phone: str, start_datetime: str, duration_hours: float = 1.0, description: str = "") -> int | None:
         """
         Crea una cita (calendar.event) en Odoo.
         start_datetime debe estar en UTC "YYYY-MM-DD HH:MM:SS"
+        Retorna el event_id (entero) si fue exitoso, o None si falló.
         """
-        if not self.uid: return False
+        if not self.uid:
+            logger.error("Odoo: uid no disponible — fallo de autenticación")
+            return None
         
         try:
             partner_id = self.search_partner(phone, name)
@@ -82,16 +85,20 @@ class OdooService:
             stop_datetime = stop_dt.strftime("%Y-%m-%d %H:%M:%S")
             
             event_data = {
-                'name': f"Cita: {name} - {description}",
+                'name': f"Cita WhatsApp: {name}",
                 'start': start_datetime,
                 'stop': stop_datetime,
                 'duration': duration_hours,
                 'partner_ids': [(4, partner_id)] if partner_id else [],
-                'description': f"Agendado via WhatsApp Bot.\nTeléfono: {phone}\n{description}"
+                'description': f"Agendado via WhatsApp Bot NODIA.\nCliente: {name}\nTeléfono: {phone}\n{description}"
             }
             
-            event_id = self.models.execute_kw(self.db, self.uid, self.api_key, 'calendar.event', 'create', [event_data])
-            return bool(event_id)
+            event_id = self.models.execute_kw(
+                self.db, self.uid, self.api_key,
+                'calendar.event', 'create', [event_data]
+            )
+            logger.info(f"Odoo: cita creada con event_id={event_id} para {name} el {start_datetime}")
+            return event_id  # Retorna el entero, no bool
         except Exception as e:
             logger.error(f"Error creando cita en Odoo: {e}")
-            return False
+            return None

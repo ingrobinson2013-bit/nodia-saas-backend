@@ -79,11 +79,12 @@ class MessageHandler:
         except Exception:
             pass  # tenant_config es opcional
 
-        # ── 7. Obtener citas de Odoo (Plan Pro) ───────────
+        # ── 7. Obtener citas de Odoo (si tiene credenciales configuradas) ──
         citas_cliente = []
         citas_negocio = []
         odoo_config = None
-        if tenant.get("plan") == "pro" and tenant.get("odoo_url"):
+        # Se activa si tiene odoo_url configurado, sin importar el plan
+        if tenant.get("odoo_url") and tenant.get("odoo_url").strip():
             odoo_config = {
                 "odoo_url": tenant.get("odoo_url"),
                 "odoo_db": tenant.get("odoo_db"),
