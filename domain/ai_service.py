@@ -1,10 +1,11 @@
 # domain/ai_service.py
-# Integración con OpenAI — responde con contexto de conversación
-# 
+# Integración con OpenAI con Tool Calling para disponibilidad y booking
+#
 # ARQUITECTURA:
-# - ai_service SOLO genera texto. No crea citas directamente.
-# - La creación de citas la maneja message_handler parseando el JSON {"action":"BOOK",...}
-# - El tool calling se usa SOLO para check_availability (consultar disponibilidad)
+# - check_availability: GPT consulta horas ocupadas en Odoo via tool
+# - create_appointment: GPT llama esta tool cuando el usuario confirma
+#   El ai_service ejecuta la creación en Odoo y retorna el event_id
+#   message_handler recibe el resultado y persiste en citas_log
 
 from openai import AsyncOpenAI
 from config import settings
@@ -19,6 +20,68 @@ SYSTEM_PROMPT_DEFAULT = (
     "Si no puedes ayudar con algo, indica amablemente que un asesor humano le atenderá pronto."
 )
 
+# ── Definición de tools disponibles para GPT ──────────────────────────────────
+
+TOOL_CHECK_AVAILABILITY = {
+    "type": "function",
+    "function": {
+        "name": "check_availability",
+        "description": (
+            "Consulta las citas ocupadas en el calendario del negocio para una fecha específica. "
+            "Llama esta función cuando el cliente proponga una fecha/hora para verificar disponibilidad. "
+            "Retorna lista de eventos con start/stop."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date_str": {
+                    "type": "string",
+                    "description": "Fecha a consultar en formato YYYY-MM-DD (hora Bogotá)"
+                }
+            },
+            "required": ["date_str"]
+        }
+    }
+}
+
+TOOL_CREATE_APPOINTMENT = {
+    "type": "function",
+    "function": {
+        "name": "create_appointment",
+        "description": (
+            "DEBES llamar esta función INMEDIATAMENTE cuando el cliente confirme la cita con "
+            "palabras como: sí, si, listo, dale, perfecto, confirmo, eso, claro, ok, va, ok. "
+            "Crea la cita en el sistema. Sin llamar esta función, la cita NO existe en el calendario."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cliente_nombre": {
+                    "type": "string",
+                    "description": "Nombre completo del cliente"
+                },
+                "servicio": {
+                    "type": "string",
+                    "description": "Nombre del servicio a realizar (ej: Corte clásico, Afeitado clásico)"
+                },
+                "precio": {
+                    "type": "string",
+                    "description": "Precio del servicio tal como aparece en el menú (ej: $20.000)"
+                },
+                "fecha": {
+                    "type": "string",
+                    "description": "Fecha de la cita en formato YYYY-MM-DD (hora Bogotá)"
+                },
+                "hora": {
+                    "type": "string",
+                    "description": "Hora de la cita en formato HH:MM de 24h (hora Bogotá, ej: 09:00, 14:30)"
+                }
+            },
+            "required": ["cliente_nombre", "servicio", "precio", "fecha", "hora"]
+        }
+    }
+}
+
 
 class AIService:
     def __init__(self, api_key: str = None, model: str = None):
@@ -31,16 +94,20 @@ class AIService:
         history: list[dict],
         system_prompt: str = None,
         odoo_config: dict = None,
-    ) -> str:
+        # Contexto de booking para ejecutar create_appointment
+        sender_wa_id: str = None,
+        sender_name: str = None,
+        negocio_servicios: str = "",
+    ) -> tuple[str, dict | None]:
         """
         Genera una respuesta de IA dado el mensaje del usuario y el historial.
-        - Si odoo_config está presente, habilita la tool check_availability.
-        - La confirmación de citas (BOOK) se emite como JSON en el texto y
-          message_handler lo intercepta para guardar en Odoo y citas_log.
+
+        Retorna: (response_text, booking_result)
+          - response_text: texto limpio para enviar al cliente
+          - booking_result: dict con los datos de la cita si se creó, o None
         """
         messages = [{"role": "system", "content": system_prompt or SYSTEM_PROMPT_DEFAULT}]
 
-        # Mapear 'agent' → 'assistant' (OpenAI no acepta 'agent')
         ROLE_MAP = {"agent": "assistant", "user": "user", "assistant": "assistant"}
         for msg in history[-10:]:
             role = ROLE_MAP.get(msg.get("role", "user"), "user")
@@ -51,27 +118,8 @@ class AIService:
         messages.append({"role": "user", "content": user_message})
 
         try:
-            # ── Tool: check_availability (solo si tiene Odoo) ──────────
             if odoo_config and odoo_config.get("url"):
-                tools = [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "check_availability",
-                            "description": "Consulta las horas ocupadas en Odoo para un día específico. Úsala cuando el cliente pregunte disponibilidad.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "date_str": {
-                                        "type": "string",
-                                        "description": "Fecha a consultar en formato YYYY-MM-DD"
-                                    }
-                                },
-                                "required": ["date_str"]
-                            }
-                        }
-                    }
-                ]
+                tools = [TOOL_CHECK_AVAILABILITY, TOOL_CREATE_APPOINTMENT]
 
                 response = await self.client.chat.completions.create(
                     model=self.model,
@@ -84,7 +132,7 @@ class AIService:
 
                 response_message = response.choices[0].message
 
-                # Si el modelo decide consultar disponibilidad
+                # ── Ciclo de tool calling ──────────────────────────────────
                 if response_message.tool_calls:
                     from domain.odoo_service import OdooService
                     odoo = OdooService(
@@ -95,6 +143,7 @@ class AIService:
                     )
 
                     messages.append(response_message)
+                    booking_data = None  # resultado de create_appointment si aplica
 
                     for tool_call in response_message.tool_calls:
                         fn_name = tool_call.function.name
@@ -104,8 +153,45 @@ class AIService:
                             result = odoo.check_availability(fn_args.get("date_str", ""))
                             tool_result = json.dumps(result, ensure_ascii=False)
                             logger.info(f"Odoo check_availability: {fn_args.get('date_str')} → {len(result)} eventos")
+
+                        elif fn_name == "create_appointment":
+                            # ✅ Crear la cita en Odoo directamente desde ai_service
+                            event_id = odoo.create_appointment(
+                                name=fn_args.get("cliente_nombre", sender_name or sender_wa_id or "Cliente"),
+                                phone=sender_wa_id or "",
+                                date_str=fn_args.get("fecha", ""),
+                                time_str=fn_args.get("hora", "00:00"),
+                                service_name=fn_args.get("servicio", ""),
+                                price=fn_args.get("precio", ""),
+                                negocio_servicios=negocio_servicios,
+                                description="Agendado via WhatsApp Bot NODIA",
+                            )
+                            if event_id:
+                                logger.info(
+                                    f"✅ Odoo: cita creada tool_call event_id={event_id} "
+                                    f"— {fn_args.get('servicio')} {fn_args.get('fecha')} {fn_args.get('hora')}"
+                                )
+                                booking_data = {
+                                    "odoo_event_id": event_id,
+                                    "cliente_nombre": fn_args.get("cliente_nombre", ""),
+                                    "servicio": fn_args.get("servicio", ""),
+                                    "precio": fn_args.get("precio", ""),
+                                    "fecha": fn_args.get("fecha", ""),
+                                    "hora": fn_args.get("hora", ""),
+                                }
+                                tool_result = json.dumps({
+                                    "success": True,
+                                    "event_id": event_id,
+                                    "message": f"Cita creada exitosamente con ID {event_id}"
+                                })
+                            else:
+                                logger.error("❌ create_appointment retornó None — fallo en Odoo")
+                                tool_result = json.dumps({
+                                    "success": False,
+                                    "message": "No se pudo crear la cita en Odoo. Reintenta."
+                                })
                         else:
-                            tool_result = json.dumps({"error": "Función no reconocida"})
+                            tool_result = json.dumps({"error": "Funcion no reconocida"})
 
                         messages.append({
                             "tool_call_id": tool_call.id,
@@ -114,27 +200,27 @@ class AIService:
                             "content": tool_result,
                         })
 
-                    # Segunda llamada con el resultado de disponibilidad
+                    # Segunda llamada: GPT genera el mensaje final para el cliente
                     second = await self.client.chat.completions.create(
                         model=self.model,
                         messages=messages,
                         max_tokens=600,
                         temperature=0.4,
                     )
-                    return second.choices[0].message.content.strip()
+                    return second.choices[0].message.content.strip(), booking_data
 
-                return response_message.content.strip()
+                return response_message.content.strip(), None
 
             else:
-                # ── Sin Odoo: llamada directa sin tools ───────────────
+                # Sin Odoo: llamada directa sin tools
                 response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     max_tokens=600,
                     temperature=0.4,
                 )
-                return response.choices[0].message.content.strip()
+                return response.choices[0].message.content.strip(), None
 
         except Exception as e:
             logger.error(f"OpenAI error: {e}")
-            return "En este momento tengo un problema técnico. Un asesor te contactará pronto. 🙏"
+            return "En este momento tengo un problema técnico. Un asesor te contactará pronto.", None
