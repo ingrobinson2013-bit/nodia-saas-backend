@@ -61,12 +61,15 @@ async def handle_odoo_webhook(tenant_id: str, request: Request):
 
         if template_name:
             # -- Modo Template Meta (requiere template aprobado) ---------------
+            # Variables: {{1}}=nombre, {{2}}=fecha, {{3}}=servicio, {{4}}=negocio
             components = [
                 {
                     "type": "body",
                     "parameters": [
                         {"type": "text", "text": nombre},
                         {"type": "text", "text": fecha},
+                        {"type": "text", "text": servicio},
+                        {"type": "text", "text": negocio},
                     ]
                 }
             ]
