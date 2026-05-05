@@ -1,4 +1,4 @@
-# domain/message_handler.py
+﻿# domain/message_handler.py
 # Orquestador principal — alineado con schema real de chat_sessions
 #
 # Schema chat_sessions:
@@ -177,30 +177,65 @@ class MessageHandler:
             access_token=tenant["wa_access_token"],
         )
 
-        # -- 12. Persistir booking si ai_service creo cita en Odoo -----------
+        # -- 12. Persistir booking (upsert: una cita activa por cliente) --------
         # booking_data viene de ai_service cuando GPT llamo create_appointment tool
         if booking_data:
             try:
+                new_odoo_id  = str(booking_data["odoo_event_id"])
+                new_fecha    = booking_data.get("fecha", "")
+                new_hora     = booking_data.get("hora", "00:00") + ":00"
+                new_servicio = booking_data.get("servicio", "")
+                new_nombre   = booking_data.get("cliente_nombre", sender_name or sender_wa_id)
+
+                from datetime import date as date_cls2
+                hoy_str = date_cls2.today().strftime("%Y-%m-%d")
+                existing_result = (
+                    db.table("citas_log")
+                    .select("id, odoo_event_id, fecha_cita")
+                    .eq("tenant_id", tenant_id)
+                    .eq("wa_from", sender_wa_id)
+                    .eq("estado", "confirmada")
+                    .gte("fecha_cita", hoy_str)
+                    .execute()
+                )
+                existing_citas = existing_result.data or []
+
+                if existing_citas:
+                    if odoo_config:
+                        try:
+                            from domain.odoo_service import OdooService
+                            odoo_svc = OdooService(**odoo_config)
+                            for cita_v in existing_citas:
+                                old_eid = cita_v.get("odoo_event_id")
+                                if old_eid and str(old_eid) != new_odoo_id:
+                                    try:
+                                        odoo_svc.cancel_appointment(int(old_eid))
+                                        logger.info(f"[{tenant['nombre']}] Odoo event {old_eid} cancelado (-> {new_odoo_id})")
+                                    except Exception as ce:
+                                        logger.warning(f"No se pudo cancelar Odoo event {old_eid}: {ce}")
+                        except Exception as oe:
+                            logger.warning(f"Error OdooService al cancelar cita vieja: {oe}")
+                    old_ids = [c["id"] for c in existing_citas]
+                    db.table("citas_log").update({"estado": "reagendada"}).in_("id", old_ids).execute()
+                    logger.info(f"[{tenant['nombre']}] {len(old_ids)} cita(s) marcadas reagendadas")
+
                 log_entry = {
                     "tenant_id":      tenant_id,
                     "wa_from":        sender_wa_id,
-                    "cliente_nombre": booking_data.get("cliente_nombre", sender_name or sender_wa_id),
-                    "servicio":       booking_data.get("servicio", ""),
-                    "fecha_cita":     booking_data.get("fecha", ""),
-                    "hora_cita":      booking_data.get("hora", "00:00") + ":00",
-                    "odoo_event_id":  str(booking_data["odoo_event_id"]),
+                    "cliente_nombre": new_nombre,
+                    "servicio":       new_servicio,
+                    "fecha_cita":     new_fecha,
+                    "hora_cita":      new_hora,
+                    "odoo_event_id":  new_odoo_id,
                     "origen":         "whatsapp_bot",
                     "estado":         "confirmada",
                 }
                 db.table("citas_log").insert(log_entry).execute()
-                logger.info(
-                    f"[{tenant['nombre']}] citas_log OK: "
-                    f"{booking_data.get('fecha')} {booking_data.get('hora')} "
-                    f"event_id={booking_data['odoo_event_id']}"
-                )
+                accion = "reagendada" if existing_citas else "nueva"
+                logger.info(f"[{tenant['nombre']}] citas_log {accion}: {new_fecha} {new_hora} event_id={new_odoo_id}")
                 db.table("chat_sessions").update({
-                    "estado":      "cita_confirmada",
-                    "cita_odoo_id": str(booking_data["odoo_event_id"]),
+                    "estado": "cita_confirmada",
+                    "cita_odoo_id": new_odoo_id,
                 }).eq("id", session["id"]).execute()
             except Exception as e:
                 logger.error(f"Error persistiendo citas_log: {e}")
