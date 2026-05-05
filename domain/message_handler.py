@@ -83,27 +83,50 @@ class MessageHandler:
         citas_cliente = []
         citas_negocio = []
         odoo_config = None
-        # Se activa si tiene odoo_url configurado, sin importar el plan
         if tenant.get("odoo_url") and tenant.get("odoo_url").strip():
             odoo_config = {
-                "url":     tenant.get("odoo_url"),     # OdooService.__init__ espera 'url'
-                "db":      tenant.get("odoo_db"),      # no 'odoo_db'
-                "user":    tenant.get("odoo_user"),    # no 'odoo_user'
-                "api_key": tenant.get("odoo_api_key"), # no 'odoo_api_key'
+                "url":     tenant.get("odoo_url"),
+                "db":      tenant.get("odoo_db"),
+                "user":    tenant.get("odoo_user"),
+                "api_key": tenant.get("odoo_api_key"),
             }
-            try:
-                from domain.odoo_service import OdooService
-                from datetime import date
-                odoo = OdooService(**odoo_config)
-                hoy_iso = date.today().strftime("%Y-%m-%d")
-                # Citas del negocio hoy
-                citas_negocio = odoo.check_availability(hoy_iso)
-                # Citas del cliente (búsqueda por teléfono)
-                partner_id = odoo.search_partner(sender_wa_id)
-                if partner_id:
-                    citas_cliente = odoo.check_availability(hoy_iso)  # TODO: filtrar por cliente
-            except Exception as e:
-                logger.warning(f"No se pudieron cargar citas de Odoo: {e}")
+
+        # ── 7. Cargar citas desde Supabase citas_log (igual que n8n) ────────────
+        # Más rápido y no depende de disponibilidad de Odoo
+        from datetime import date as date_cls
+        hoy_iso = date_cls.today().strftime("%Y-%m-%d")
+
+        try:
+            # Citas futuras del CLIENTE en este negocio
+            r_cliente = (
+                db.table("citas_log")
+                .select("fecha_cita, hora_cita, servicio")
+                .eq("tenant_id", tenant_id)
+                .eq("wa_from", sender_wa_id)
+                .gte("fecha_cita", hoy_iso)
+                .order("fecha_cita", desc=False)
+                .limit(5)
+                .execute()
+            )
+            citas_cliente = r_cliente.data or []
+        except Exception as e:
+            logger.warning(f"No se pudieron cargar citas del cliente: {e}")
+
+        try:
+            # Horas ocupadas del NEGOCIO (todas las citas confirmadas)
+            r_negocio = (
+                db.table("citas_log")
+                .select("fecha_cita, hora_cita")
+                .eq("tenant_id", tenant_id)
+                .gte("fecha_cita", hoy_iso)
+                .order("fecha_cita", desc=False)
+                .order("hora_cita", desc=False)
+                .limit(30)
+                .execute()
+            )
+            citas_negocio = r_negocio.data or []
+        except Exception as e:
+            logger.warning(f"No se pudieron cargar citas del negocio: {e}")
 
         # ── 8. Construir prompt con contexto dinámico ────────
         # Si el tenant tiene prompt personalizado en Supabase → usarlo como base
@@ -153,31 +176,59 @@ class MessageHandler:
                 # Pausar la IA y pasar el control al humano
                 db.table("chat_sessions").update({"bot_mode": False}).eq("id", session["id"]).execute()
                 logger.info(f"[{tenant['nombre']}] Bot pausado por ESCALATE para {sender_wa_id}")
+                # Notificar al dueño si tiene owner_phone configurado
+                owner_phone = tenant.get("owner_phone")
+                if owner_phone:
+                    try:
+                        wa_owner = WhatsAppService(
+                            phone_number_id=tenant["wa_phone_id"],
+                            access_token=tenant["wa_access_token"],
+                        )
+                        await wa_owner.send_text(
+                            to=owner_phone,
+                            message=(
+                                f"🚨 *{tenant['nombre']}* — Intervención requerida\n"
+                                f"Cliente: {sender_name or sender_wa_id}\n"
+                                f"Número: {sender_wa_id}\n"
+                                f"El bot ha sido pausado. Por favor atiende al cliente."
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"Error notificando al dueño por ESCALATE: {e}")
 
             elif action == "BOOK":
                 date_str = crm_action.get("date", "")
                 time_str = crm_action.get("time", "00:00")
                 cliente_nombre = crm_action.get("name", sender_name or sender_wa_id)
                 servicio = crm_action.get("service", "")
-                precio = crm_action.get("price", "")
+                precio   = crm_action.get("price", "")
                 odoo_event_id = None
 
-                # Crear en Odoo (solo si tiene credenciales)
+                # Crear en Odoo con conversión Bogotá → UTC
                 if odoo_config:
                     try:
                         from domain.odoo_service import OdooService
                         odoo = OdooService(**odoo_config)
-                        start_dt = f"{date_str} {time_str}:00"
+                        # Leer servicios del negocio para calcular duración
+                        negocio_servicios = ""
+                        if tenant_config:
+                            negocio_servicios = tenant_config.get("servicios_texto", "")
                         odoo_event_id = odoo.create_appointment(
                             name=cliente_nombre,
                             phone=sender_wa_id,
-                            start_datetime=start_dt,
-                            description=f"Servicio: {servicio} | Precio: {precio}"
+                            date_str=date_str,
+                            time_str=time_str,
+                            service_name=servicio,
+                            price=precio,
+                            negocio_servicios=negocio_servicios,
+                            description=f"Agendado vía WhatsApp Bot NODIA",
                         )
                         if odoo_event_id:
-                            logger.info(f"[{tenant['nombre']}] Cita creada en Odoo: {start_dt}")
+                            logger.info(f"[{tenant['nombre']}] ✅ Cita Odoo creada: {date_str} {time_str} Bogotá — {cliente_nombre}")
+                        else:
+                            logger.error(f"[{tenant['nombre']}] ❌ OdooService.create_appointment retornó None")
                     except Exception as e:
-                        logger.error(f"Error creando cita en Odoo: {e}")
+                        logger.error(f"[{tenant['nombre']}] ❌ Error creando cita en Odoo: {e}")
 
                 # ✅ Siempre guardar en citas_log (incluso sin Odoo)
                 try:
@@ -205,6 +256,64 @@ class MessageHandler:
 
             # Limpiar el JSON del texto visible para el cliente
             clean_response = re.sub(r'\{"action".*?\}', '', response_text, flags=re.DOTALL).strip()
+
+            # ── CANCEL: cancelar cita en Odoo + Supabase ────────────────
+            if action == "CANCEL" and odoo_config:
+                date_str  = crm_action.get("date", "")
+                time_str  = crm_action.get("time", "00:00")
+                try:
+                    from domain.odoo_service import OdooService
+                    odoo = OdooService(**odoo_config)
+                    # Buscar en citas_log la cita a cancelar
+                    cita_result = (
+                        db.table("citas_log")
+                        .select("id, odoo_event_id")
+                        .eq("tenant_id", tenant_id)
+                        .eq("wa_from", sender_wa_id)
+                        .eq("fecha_cita", date_str)
+                        .execute()
+                    )
+                    if cita_result.data:
+                        cita = cita_result.data[0]
+                        if cita.get("odoo_event_id"):
+                            odoo.cancel_appointment(int(cita["odoo_event_id"]))
+                        db.table("citas_log").update({"estado": "cancelada"}).eq("id", cita["id"]).execute()
+                        logger.info(f"[{tenant['nombre']}] Cita cancelada: {date_str} {time_str} — {sender_wa_id}")
+                    else:
+                        logger.warning(f"CANCEL: no se encontró cita en citas_log para {sender_wa_id} {date_str}")
+                except Exception as e:
+                    logger.error(f"Error procesando CANCEL: {e}")
+
+            # ── RESCHEDULE: reagendar cita en Odoo + Supabase ───────────
+            elif action == "RESCHEDULE" and odoo_config:
+                old_date  = crm_action.get("old_date", "")
+                new_date  = crm_action.get("new_date", "")
+                new_time  = crm_action.get("new_time", "00:00")
+                try:
+                    from domain.odoo_service import OdooService
+                    odoo = OdooService(**odoo_config)
+                    cita_result = (
+                        db.table("citas_log")
+                        .select("id, odoo_event_id")
+                        .eq("tenant_id", tenant_id)
+                        .eq("wa_from", sender_wa_id)
+                        .eq("fecha_cita", old_date)
+                        .execute()
+                    )
+                    if cita_result.data:
+                        cita = cita_result.data[0]
+                        new_start_dt = f"{new_date} {new_time}:00"
+                        if cita.get("odoo_event_id"):
+                            odoo.reschedule_appointment(int(cita["odoo_event_id"]), new_start_dt)
+                        db.table("citas_log").update({
+                            "fecha_cita": new_date,
+                            "hora_cita":  f"{new_time}:00",
+                        }).eq("id", cita["id"]).execute()
+                        logger.info(f"[{tenant['nombre']}] Cita reagendada a {new_start_dt} para {sender_wa_id}")
+                    else:
+                        logger.warning(f"RESCHEDULE: no se encontró cita en citas_log para {sender_wa_id} {old_date}")
+                except Exception as e:
+                    logger.error(f"Error procesando RESCHEDULE: {e}")
 
         # Enviar solo el texto limpio al cliente
         await wa.send_text(to=sender_wa_id, message=clean_response or response_text)
@@ -282,10 +391,13 @@ class MessageHandler:
         """
         Extrae la acción CRM en JSON del texto de respuesta de la IA.
         VALE emite acciones como: {"action":"BOOK","name":"..."}
+        Soporta: BOOK | LEAD | PQR | ESCALATE | CANCEL | RESCHEDULE
         """
         try:
-            # Buscar un JSON con campo "action" en el texto
-            match = re.search(r'\{"action"\s*:\s*"(BOOK|LEAD|PQR|ESCALATE)".*?\}', text, re.DOTALL)
+            match = re.search(
+                r'\{"action"\s*:\s*"(BOOK|LEAD|PQR|ESCALATE|CANCEL|RESCHEDULE)".*?\}',
+                text, re.DOTALL
+            )
             if match:
                 return json.loads(match.group(0))
         except Exception as e:

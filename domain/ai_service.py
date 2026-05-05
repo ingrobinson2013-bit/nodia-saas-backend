@@ -52,7 +52,7 @@ class AIService:
 
         try:
             # ── Tool: check_availability (solo si tiene Odoo) ──────────
-            if odoo_config and odoo_config.get("odoo_url"):
+            if odoo_config and odoo_config.get("url"):
                 tools = [
                     {
                         "type": "function",
@@ -88,10 +88,10 @@ class AIService:
                 if response_message.tool_calls:
                     from domain.odoo_service import OdooService
                     odoo = OdooService(
-                        url=odoo_config["odoo_url"],
-                        db=odoo_config["odoo_db"],
-                        user=odoo_config["odoo_user"],
-                        api_key=odoo_config["odoo_api_key"],
+                        url=odoo_config["url"],
+                        db=odoo_config["db"],
+                        user=odoo_config["user"],
+                        api_key=odoo_config["api_key"],
                     )
 
                     messages.append(response_message)
