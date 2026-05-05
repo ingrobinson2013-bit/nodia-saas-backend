@@ -15,6 +15,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+# DEBUG solo para orquestador para ver el response completo de GPT
+logging.getLogger("domain.message_handler").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # ── App ───────────────────────────────────────────────────

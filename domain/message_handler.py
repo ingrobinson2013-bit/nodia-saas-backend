@@ -166,11 +166,19 @@ class MessageHandler:
         )
         # ── 10. Parsear acciones CRM del response ─────────
         crm_action = self._extract_crm_action(response_text)
-        clean_response = response_text
+        # El JSON de accion se elimina del mensaje visible al cliente
+        # pero se PRESERVA en el historial para que GPT mantenga contexto
+        clean_response = re.sub(r'\{"action".*?\}', '', response_text, flags=re.DOTALL).strip()
+
+        # DEBUG: loguear el response de GPT para diagnosticar BOOK
+        logger.debug(f"[{tenant['nombre']}] GPT response: {response_text[:300]}")
+        if crm_action:
+            logger.info(f"[{tenant['nombre']}] Accion CRM detectada: {crm_action}")
+        else:
+            logger.info(f"[{tenant['nombre']}] Sin accion CRM en el response")
 
         if crm_action:
             action = crm_action.get("action")
-            logger.info(f"[{tenant['nombre']}] Acción CRM detectada: {action}")
 
             if action == "ESCALATE":
                 # Pausar la IA y pasar el control al humano
@@ -320,10 +328,19 @@ class MessageHandler:
         await wa.mark_as_read(message_id)
 
         # ── 11. Actualizar historial en Supabase ──────────
+        # IMPORTANTE: guardar response_text completo (con JSON de accion)
+        # para que GPT tenga contexto en el proximo turno.
+        # El cliente solo ve clean_response (sin JSON).
         new_history = history + [
             user_message_entry,
-            {"role": "assistant", "content": clean_response or response_text, "timestamp": datetime.now(timezone.utc).isoformat()},
+            {
+                "role": "assistant",
+                "content": response_text,  # historial interno conserva el JSON
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
         ]
+        # Limitar a MAX_HISTORY turnos para no saturar tokens
+        new_history = new_history[-(MAX_HISTORY * 2):]
         self._update_session(db, session["id"], new_history)
 
         logger.info(f"[{tenant['nombre']}] ✅ Respuesta enviada a {sender_wa_id}")
