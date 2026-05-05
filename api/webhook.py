@@ -93,21 +93,25 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 async def _verify_meta_signature(request: Request) -> bool:
     """
     Verifica la firma X-Hub-Signature-256 enviada por Meta.
-    Garantiza que el request realmente viene de Meta.
+    Si META_APP_SECRET no está configurado, permite todos los requests (modo dev).
     """
     if not settings.META_APP_SECRET:
-        # En desarrollo sin secret configurado, permitir
+        logger.info("🔓 META_APP_SECRET no configurado — verificación de firma desactivada (modo dev)")
         return True
 
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not signature.startswith("sha256="):
+        logger.error(f"❌ Firma inválida — header X-Hub-Signature-256 ausente o malformado: '{signature[:30]}'")
         return False
 
     body = await request.body()
     expected = hmac.new(
-        settings.META_APP_SECRET.encode(),
+        settings.META_APP_SECRET.strip().encode(),
         body,
         hashlib.sha256,
     ).hexdigest()
 
-    return hmac.compare_digest(f"sha256={expected}", signature)
+    valid = hmac.compare_digest(f"sha256={expected}", signature)
+    if not valid:
+        logger.error(f"❌ Firma HMAC no coincide. ¿META_APP_SECRET correcto en EasyPanel?")
+    return valid
