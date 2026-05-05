@@ -86,10 +86,10 @@ class MessageHandler:
         # Se activa si tiene odoo_url configurado, sin importar el plan
         if tenant.get("odoo_url") and tenant.get("odoo_url").strip():
             odoo_config = {
-                "odoo_url": tenant.get("odoo_url"),
-                "odoo_db": tenant.get("odoo_db"),
-                "odoo_user": tenant.get("odoo_user"),
-                "odoo_api_key": tenant.get("odoo_api_key"),
+                "url":     tenant.get("odoo_url"),     # OdooService.__init__ espera 'url'
+                "db":      tenant.get("odoo_db"),      # no 'odoo_db'
+                "user":    tenant.get("odoo_user"),    # no 'odoo_user'
+                "api_key": tenant.get("odoo_api_key"), # no 'odoo_api_key'
             }
             try:
                 from domain.odoo_service import OdooService
