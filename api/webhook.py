@@ -15,8 +15,6 @@ handler = MessageHandler()
 
 # ──────────────────────────────────────────────────────────
 # GET /webhook — Verificación del webhook con Meta
-# Meta envía este request cuando configuras el webhook en
-# el panel de Meta for Developers
 # ──────────────────────────────────────────────────────────
 @router.get("/webhook")
 async def verify_webhook(request: Request):
@@ -40,12 +38,15 @@ async def verify_webhook(request: Request):
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
     # Verificar firma HMAC-SHA256 de Meta (seguridad)
     if not await _verify_meta_signature(request):
+        logger.error("❌ Firma Meta inválida — request rechazado")
         raise HTTPException(status_code=401, detail="Firma Meta inválida")
 
     body = await request.json()
+    logger.info(f"📥 Webhook recibido de Meta: {str(body)[:500]}")
 
     # Ignorar notificaciones que no son mensajes
     if body.get("object") != "whatsapp_business_account":
+        logger.info(f"⏭️  Ignorado — object={body.get('object')}")
         return {"status": "ignored"}
 
     for entry in body.get("entry", []):
@@ -56,16 +57,25 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
             phone_number_id = value.get("metadata", {}).get("phone_number_id")
             messages = value.get("messages", [])
 
+            logger.info(f"📱 phone_number_id={phone_number_id} | mensajes entrantes={len(messages)}")
+
+            if not messages:
+                logger.info("⚠️ No hay mensajes en este change (status update), ignorado")
+                continue
+
             for msg in messages:
-                if msg.get("type") != "text":
-                    # Por ahora solo procesamos texto
-                    # TODO: manejar audio, imagen, documento
-                    logger.info(f"Tipo de mensaje no soportado: {msg.get('type')}")
+                msg_type = msg.get("type")
+                logger.info(f"📨 Tipo={msg_type} | from={msg.get('from')}")
+
+                if msg_type != "text":
+                    logger.info(f"⏭️  Tipo '{msg_type}' no soportado aún")
                     continue
 
                 sender_wa_id = msg["from"]
                 message_text = msg["text"]["body"]
                 message_id   = msg["id"]
+
+                logger.info(f"✉️  Procesando: '{message_text[:80]}' de {sender_wa_id}")
 
                 # Procesar en background para responder 200 a Meta de inmediato
                 # Meta reintenta si no recibe 200 en < 5 segundos
