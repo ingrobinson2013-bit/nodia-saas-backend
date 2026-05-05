@@ -153,21 +153,54 @@ class MessageHandler:
                 db.table("chat_sessions").update({"bot_mode": False}).eq("id", session["id"]).execute()
                 logger.info(f"[{tenant['nombre']}] Bot pausado por ESCALATE para {sender_wa_id}")
 
-            elif action == "BOOK" and odoo_config:
+            elif action == "BOOK":
+                date_str = crm_action.get("date", "")
+                time_str = crm_action.get("time", "00:00")
+                cliente_nombre = crm_action.get("name", sender_name or sender_wa_id)
+                servicio = crm_action.get("service", "")
+                precio = crm_action.get("price", "")
+                odoo_event_id = None
+
+                # Crear en Odoo (solo si tiene credenciales)
+                if odoo_config:
+                    try:
+                        from domain.odoo_service import OdooService
+                        odoo = OdooService(**odoo_config)
+                        start_dt = f"{date_str} {time_str}:00"
+                        odoo_event_id = odoo.create_appointment(
+                            name=cliente_nombre,
+                            phone=sender_wa_id,
+                            start_datetime=start_dt,
+                            description=f"Servicio: {servicio} | Precio: {precio}"
+                        )
+                        if odoo_event_id:
+                            logger.info(f"[{tenant['nombre']}] Cita creada en Odoo: {start_dt}")
+                    except Exception as e:
+                        logger.error(f"Error creando cita en Odoo: {e}")
+
+                # ✅ Siempre guardar en citas_log (incluso sin Odoo)
                 try:
-                    from domain.odoo_service import OdooService
-                    odoo = OdooService(**odoo_config)
-                    date_str = crm_action.get("date", "")
-                    time_str = crm_action.get("time", "00:00")
-                    start_dt = f"{date_str} {time_str}:00"
-                    odoo.create_appointment(
-                        name=crm_action.get("name", sender_name or sender_wa_id),
-                        phone=sender_wa_id,
-                        start_datetime=start_dt
-                    )
-                    logger.info(f"[{tenant['nombre']}] Cita creada en Odoo: {start_dt}")
+                    log_entry = {
+                        "tenant_id": tenant_id,
+                        "wa_from": sender_wa_id,
+                        "cliente_nombre": cliente_nombre,
+                        "servicio": servicio,
+                        "fecha_cita": date_str,
+                        "hora_cita": f"{time_str}:00",
+                        "odoo_event_id": str(odoo_event_id) if odoo_event_id else None,
+                        "origen": "whatsapp_bot",
+                    }
+                    db.table("citas_log").insert(log_entry).execute()
+                    logger.info(f"[{tenant['nombre']}] Cita guardada en citas_log: {date_str} {time_str} — {cliente_nombre}")
+
+                    # Actualizar chat_session con estado 'cita_confirmada' y referencia a Odoo
+                    update_data = {"estado": "cita_confirmada"}
+                    if odoo_event_id:
+                        update_data["cita_odoo_id"] = str(odoo_event_id)
+                        
+                    db.table("chat_sessions").update(update_data).eq("id", session["id"]).execute()
                 except Exception as e:
-                    logger.error(f"Error creando cita en Odoo: {e}")
+                    logger.error(f"Error guardando en citas_log: {e}")
 
             # Limpiar el JSON del texto visible para el cliente
             clean_response = re.sub(r'\{"action".*?\}', '', response_text, flags=re.DOTALL).strip()
