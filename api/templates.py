@@ -7,12 +7,66 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from infrastructure.repositories.tenant_repo import TenantRepository
+from infrastructure.database import get_supabase
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 tenant_repo = TenantRepository()
 
 GRAPH_URL = "https://graph.facebook.com/v19.0"
+
+
+async def _resolve_waba_id(phone_number_id: str, access_token: str) -> str | None:
+    """
+    Extrae el WABA ID automaticamente desde Meta usando el phone_number_id.
+    GET /v19.0/{phone_number_id}?fields=whatsapp_business_account
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{GRAPH_URL}/{phone_number_id}",
+                params={
+                    "fields": "whatsapp_business_account",
+                    "access_token": access_token,
+                }
+            )
+        data = resp.json()
+        waba = data.get("whatsapp_business_account", {})
+        waba_id = waba.get("id")
+        if waba_id:
+            logger.info(f"WABA ID resuelto automaticamente: {waba_id}")
+        return waba_id
+    except Exception as e:
+        logger.warning(f"No se pudo resolver WABA ID: {e}")
+        return None
+
+
+@router.get("/templates/resolve-waba/{tenant_id}")
+async def resolve_waba(tenant_id: str):
+    """
+    Extrae y guarda automaticamente el WABA ID del tenant desde Meta.
+    Llamar una vez para autoconfigurar el tenant sin entrada manual.
+    """
+    tenant = tenant_repo.get_by_id(tenant_id)
+    if not tenant or not tenant.get("activo"):
+        raise HTTPException(status_code=404, detail="Tenant no encontrado")
+
+    phone_id = tenant.get("wa_phone_id")
+    token    = tenant.get("wa_access_token")
+
+    if not phone_id or not token:
+        raise HTTPException(status_code=400, detail="wa_phone_id o wa_access_token no configurados")
+
+    waba_id = await _resolve_waba_id(phone_id, token)
+    if not waba_id:
+        raise HTTPException(status_code=400, detail="No se pudo obtener WABA ID de Meta")
+
+    # Guardar en Supabase
+    db = get_supabase()
+    db.table("tenants").update({"waba_id": waba_id}).eq("tenant_id", tenant_id).execute()
+    logger.info(f"[{tenant.get('nombre')}] waba_id={waba_id} guardado automaticamente")
+
+    return {"waba_id": waba_id, "message": "WABA ID resuelto y guardado automaticamente"}
 
 
 class TemplateComponent(BaseModel):
