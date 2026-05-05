@@ -7,10 +7,12 @@
 
 import logging
 import json
+import re
 from datetime import datetime, timezone
 from infrastructure.repositories.tenant_repo import TenantRepository
 from domain.ai_service import AIService
 from domain.whatsapp_service import WhatsAppService
+from domain.prompt_builder import build_system_prompt
 from infrastructure.database import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -61,20 +63,25 @@ class MessageHandler:
         user_message_entry = {"role": "user", "content": message_text, "timestamp": datetime.now(timezone.utc).isoformat()}
         
         # ── 4. Verificar bot_mode ──────────────────────────
-        # Si bot_mode=False, el agente humano tomó el control
         if not session.get("bot_mode", True):
-            logger.info(f"[{tenant['nombre']}] bot_mode=False para {sender_wa_id}. IA pausada, solo se guarda el mensaje.")
-            # Actualizamos el historial solo con el mensaje del usuario para que el panel lo vea
+            logger.info(f"[{tenant['nombre']}] bot_mode=False para {sender_wa_id}. IA pausada.")
             self._update_session(db, session["id"], history + [user_message_entry])
             return
 
         # ── 5. Preparar historial para OpenAI ─────────────
-        # Recortar a últimos MAX_HISTORY turnos (solo para la IA)
         history_context = history[-MAX_HISTORY:]
 
-        # ── 6. Llamar a IA ────────────────────────────────
-        ai_prompt = tenant.get("ai_prompt") or None
-        
+        # ── 6. Cargar tenant_config (dirección, horario, servicios) ───
+        tenant_config = None
+        try:
+            tc_result = db.table("tenant_config").select("*").eq("tenant_id", tenant_id).single().execute()
+            tenant_config = tc_result.data
+        except Exception:
+            pass  # tenant_config es opcional
+
+        # ── 7. Obtener citas de Odoo (Plan Pro) ───────────
+        citas_cliente = []
+        citas_negocio = []
         odoo_config = None
         if tenant.get("plan") == "pro" and tenant.get("odoo_url"):
             odoo_config = {
@@ -83,12 +90,40 @@ class MessageHandler:
                 "odoo_user": tenant.get("odoo_user"),
                 "odoo_api_key": tenant.get("odoo_api_key"),
             }
+            try:
+                from domain.odoo_service import OdooService
+                from datetime import date
+                odoo = OdooService(**odoo_config)
+                hoy_iso = date.today().strftime("%Y-%m-%d")
+                # Citas del negocio hoy
+                citas_negocio = odoo.check_availability(hoy_iso)
+                # Citas del cliente (búsqueda por teléfono)
+                partner_id = odoo.search_partner(sender_wa_id)
+                if partner_id:
+                    citas_cliente = odoo.check_availability(hoy_iso)  # TODO: filtrar por cliente
+            except Exception as e:
+                logger.warning(f"No se pudieron cargar citas de Odoo: {e}")
+
+        # ── 8. Construir prompt dinámico VALE ─────────────
+        # Usa el ai_prompt de Supabase si está configurado; si no, construye el de VALE
+        ai_prompt_manual = tenant.get("ai_prompt") or ""
+        if ai_prompt_manual and len(ai_prompt_manual) > 50:
+            # El tenant tiene un prompt personalizado en Supabase — usarlo tal cual
+            system_prompt = ai_prompt_manual
+        else:
+            # Construir el prompt dinámico de VALE con datos reales
+            system_prompt = build_system_prompt(
+                tenant=tenant,
+                tenant_config=tenant_config,
+                citas_cliente=citas_cliente,
+                citas_negocio=citas_negocio
+            )
             
         ai = AIService()
         response_text = await ai.get_response(
             user_message=message_text,
             history=history_context,
-            system_prompt=ai_prompt,
+            system_prompt=system_prompt,
             odoo_config=odoo_config
         )
 
@@ -97,13 +132,46 @@ class MessageHandler:
             phone_number_id=tenant["wa_phone_id"],
             access_token=tenant["wa_access_token"],
         )
-        await wa.send_text(to=sender_wa_id, message=response_text)
+        # ── 10. Parsear acciones CRM del response ─────────
+        crm_action = self._extract_crm_action(response_text)
+        clean_response = response_text
+
+        if crm_action:
+            action = crm_action.get("action")
+            logger.info(f"[{tenant['nombre']}] Acción CRM detectada: {action}")
+
+            if action == "ESCALATE":
+                # Pausar la IA y pasar el control al humano
+                db.table("chat_sessions").update({"bot_mode": False}).eq("id", session["id"]).execute()
+                logger.info(f"[{tenant['nombre']}] Bot pausado por ESCALATE para {sender_wa_id}")
+
+            elif action == "BOOK" and odoo_config:
+                try:
+                    from domain.odoo_service import OdooService
+                    odoo = OdooService(**odoo_config)
+                    date_str = crm_action.get("date", "")
+                    time_str = crm_action.get("time", "00:00")
+                    start_dt = f"{date_str} {time_str}:00"
+                    odoo.create_appointment(
+                        name=crm_action.get("name", sender_name or sender_wa_id),
+                        phone=sender_wa_id,
+                        start_datetime=start_dt
+                    )
+                    logger.info(f"[{tenant['nombre']}] Cita creada en Odoo: {start_dt}")
+                except Exception as e:
+                    logger.error(f"Error creando cita en Odoo: {e}")
+
+            # Limpiar el JSON del texto visible para el cliente
+            clean_response = re.sub(r'\{"action".*?\}', '', response_text, flags=re.DOTALL).strip()
+
+        # Enviar solo el texto limpio al cliente
+        await wa.send_text(to=sender_wa_id, message=clean_response or response_text)
         await wa.mark_as_read(message_id)
 
-        # ── 8. Actualizar historial en Supabase (Usuario + IA) ────────────
+        # ── 11. Actualizar historial en Supabase ──────────
         new_history = history + [
             user_message_entry,
-            {"role": "assistant", "content": response_text, "timestamp": datetime.now(timezone.utc).isoformat()},
+            {"role": "assistant", "content": clean_response or response_text, "timestamp": datetime.now(timezone.utc).isoformat()},
         ]
         self._update_session(db, session["id"], new_history)
 
@@ -167,3 +235,18 @@ class MessageHandler:
             }).eq("id", session_id).execute()
         except Exception as e:
             logger.error(f"Error actualizando historial: {e}")
+
+    def _extract_crm_action(self, text: str) -> dict | None:
+        """
+        Extrae la acción CRM en JSON del texto de respuesta de la IA.
+        VALE emite acciones como: {"action":"BOOK","name":"..."}
+        """
+        try:
+            # Buscar un JSON con campo "action" en el texto
+            match = re.search(r'\{"action"\s*:\s*"(BOOK|LEAD|PQR|ESCALATE)".*?\}', text, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+        except Exception as e:
+            logger.warning(f"No se pudo parsear acción CRM: {e}")
+        return None
+
