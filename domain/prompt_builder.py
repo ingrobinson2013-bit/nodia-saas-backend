@@ -219,3 +219,86 @@ Escalar a humano:
 - NUNCA repitas una pregunta ya respondida en el historial"""
 
     return prompt
+def inject_dynamic_context(
+    base_prompt: str,
+    tenant: dict,
+    citas_cliente: list = None,
+    citas_negocio: list = None,
+) -> str:
+    """
+    Toma el prompt personalizado del tenant (almacenado en Supabase)
+    e inyecta al final el bloque dinámico de fecha, calendario y citas.
+    
+    Así cada negocio tiene su prompt único, pero siempre con contexto
+    de tiempo real (Bogotá) y disponibilidad de Odoo.
+    """
+    # ── Contexto de tiempo (Bogotá) ───────────────────────
+    now_bogota = datetime.now(BOGOTA_TZ)
+    hoy_iso = now_bogota.strftime("%Y-%m-%d")
+    manana_iso = (now_bogota + timedelta(days=1)).strftime("%Y-%m-%d")
+    hora_bogota = now_bogota.strftime("%I:%M %p")
+    weekday_map = {0:'Lunes',1:'Martes',2:'Miércoles',3:'Jueves',4:'Viernes',5:'Sábado',6:'Domingo'}
+    dia_nombre = weekday_map[now_bogota.weekday()]
+    mes_nombre = MESES[now_bogota.month - 1]
+
+    # ── Calendario 14 días ─────────────────────────────────
+    calendario = ""
+    for i in range(15):
+        d = now_bogota + timedelta(days=i)
+        d_weekday = weekday_map[d.weekday()]
+        d_mes = MESES[d.month - 1]
+        d_iso = d.strftime("%Y-%m-%d")
+        label = " ← HOY" if i == 0 else " ← MAÑANA" if i == 1 else ""
+        calendario += f"  {d_weekday} {d.day} de {d_mes} de {d.year} → {d_iso}{label}\n"
+
+    # ── Citas del cliente ──────────────────────────────────
+    if citas_cliente:
+        lineas = [f"  - {c.get('name','')} el {c.get('start','')}" for c in citas_cliente]
+        citas_cliente_texto = "\n".join(lineas)
+    else:
+        citas_cliente_texto = "  Sin citas agendadas."
+
+    # ── Citas/horas ocupadas del negocio ───────────────────
+    if citas_negocio:
+        lineas = [f"  - {c.get('start','')} a {c.get('stop','')}: {c.get('name','Ocupado')}"
+                  for c in citas_negocio]
+        citas_negocio_texto = "\n".join(lineas)
+    else:
+        citas_negocio_texto = "  Sin horas ocupadas registradas."
+
+    tenant_id = tenant.get("tenant_id", "")
+
+    # ── Bloque dinámico que se inyecta siempre ─────────────
+    dynamic_block = f"""
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+👤 CITAS DE ESTE CLIENTE (ACTUALIZADO EN TIEMPO REAL)
+━━━━━━━━━━━━━━━━━━━━━━━━
+{citas_cliente_texto}
+→ Si tiene cita próxima, recuérdasela ANTES de agendar una nueva.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+🚫 HORAS OCUPADAS HOY (NO OFREZCAS ESTAS)
+━━━━━━━━━━━━━━━━━━━━━━━━
+{citas_negocio_texto}
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+📅 FECHA Y HORA ACTUAL — BOGOTÁ (UTC-5)
+━━━━━━━━━━━━━━━━━━━━━━━━
+Ahora: {hora_bogota} — {dia_nombre} {now_bogota.day} de {mes_nombre} de {now_bogota.year}
+
+Próximos 14 días disponibles:
+{calendario}
+- "hoy" = {hoy_iso} / "mañana" = {manana_iso}
+- Si no dice hora → pregunta: "¿A qué horas le queda bien?"
+- NUNCA ofrezcas fechas pasadas
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+📲 ACCIONES CRM (emitir como JSON puro al final de tu respuesta)
+━━━━━━━━━━━━━━━━━━━━━━━━
+Cita confirmada → {{"action":"BOOK","name":"","service":"","price":"","date":"YYYY-MM-DD","time":"HH:MM","branch_id":"{tenant_id}"}}
+Interés sin agendar → {{"action":"LEAD","name":"","interest":"","notes":"","branch_id":"{tenant_id}"}}
+Queja → {{"action":"PQR","name":"","issue":"","priority":"alta/media/baja","branch_id":"{tenant_id}"}}
+Escalar humano → {{"action":"ESCALATE","name":"","reason":"","branch_id":"{tenant_id}"}}"""
+
+    return base_prompt.strip() + dynamic_block

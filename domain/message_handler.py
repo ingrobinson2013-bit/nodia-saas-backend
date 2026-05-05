@@ -104,21 +104,29 @@ class MessageHandler:
             except Exception as e:
                 logger.warning(f"No se pudieron cargar citas de Odoo: {e}")
 
-        # ── 8. Construir prompt dinámico VALE ─────────────
-        # Usa el ai_prompt de Supabase si está configurado; si no, construye el de VALE
+        # ── 8. Construir prompt con contexto dinámico ────────
+        # Si el tenant tiene prompt personalizado en Supabase → usarlo como base
+        # y siempre inyectar el bloque dinámico (fechas, calendario, citas de Odoo)
+        from domain.prompt_builder import build_system_prompt, inject_dynamic_context
+
         ai_prompt_manual = tenant.get("ai_prompt") or ""
-        if ai_prompt_manual and len(ai_prompt_manual) > 50:
-            # El tenant tiene un prompt personalizado en Supabase — usarlo tal cual
-            system_prompt = ai_prompt_manual
+        if ai_prompt_manual and len(ai_prompt_manual.strip()) > 50:
+            # ✅ Prompt personalizado del negocio + contexto dinámico inyectado
+            system_prompt = inject_dynamic_context(
+                base_prompt=ai_prompt_manual,
+                tenant=tenant,
+                citas_cliente=citas_cliente,
+                citas_negocio=citas_negocio,
+            )
         else:
-            # Construir el prompt dinámico de VALE con datos reales
+            # Fallback: prompt genérico de VALE con todos los datos del negocio
             system_prompt = build_system_prompt(
                 tenant=tenant,
                 tenant_config=tenant_config,
                 citas_cliente=citas_cliente,
-                citas_negocio=citas_negocio
+                citas_negocio=citas_negocio,
             )
-            
+
         ai = AIService()
         response_text = await ai.get_response(
             user_message=message_text,
