@@ -124,22 +124,50 @@ async def _process_tenant(tenant: dict):
         except Exception:
             pass  # Si la tabla no existe aun, continuamos
 
-        # Enviar WhatsApp
+        # Enviar WhatsApp — primero intenta con template, fallback a texto libre
         try:
             wa = WhatsAppService(
                 phone_number_id=tenant["wa_phone_id"],
                 access_token=tenant["wa_access_token"],
             )
-            mensaje = (
-                f"Hola {nombre_cliente}! Tu cita ha sido confirmada. \n\n"
-                f"*{servicio}*\n"
-                f"*Fecha:* {fecha_str}\n"
-                f"*Lugar:* {nombre}\n\n"
-                f"Si necesitas reagendar o cancelar, respondenos aqui mismo.\n"
-                f"Te esperamos! ✂️"
-            )
-            await wa.send_text(to=phone, message=mensaje)
-            logger.info(f"NotificationJob [{nombre}]: WA enviado a {phone} evento {event_id}")
+
+            # Intento 1: Template aprobado por Meta (funciona con clientes nuevos)
+            enviado = False
+            try:
+                components = [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": nombre_cliente},
+                            {"type": "text", "text": fecha_str},
+                            {"type": "text", "text": servicio},
+                            {"type": "text", "text": nombre},
+                        ]
+                    }
+                ]
+                await wa.send_template(
+                    to=phone,
+                    template_name="cita_confirmada",
+                    lang="es",
+                    components=components,
+                )
+                logger.info(f"NotificationJob [{nombre}]: Template WA enviado a {phone} evento {event_id}")
+                enviado = True
+            except Exception as te:
+                logger.warning(f"NotificationJob [{nombre}]: Template falló ({te}), intentando texto libre")
+
+            # Intento 2: Texto libre (ventana 24h abierta)
+            if not enviado:
+                mensaje = (
+                    f"Hola {nombre_cliente}! Tu cita ha sido confirmada. \n\n"
+                    f"*{servicio}*\n"
+                    f"*Fecha:* {fecha_str}\n"
+                    f"*Lugar:* {nombre}\n\n"
+                    f"Si necesitas reagendar o cancelar, respondenos aqui mismo.\n"
+                    f"Te esperamos! ✂️"
+                )
+                await wa.send_text(to=phone, message=mensaje)
+                logger.info(f"NotificationJob [{nombre}]: Texto libre WA enviado a {phone} evento {event_id}")
 
             # Registrar envio en Supabase
             try:
