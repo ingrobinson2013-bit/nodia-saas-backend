@@ -1,14 +1,17 @@
 # main.py
 # NODIA SaaS Backend — Entry point FastAPI
 
+import asyncio
 import logging
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.webhook import router as webhook_router
 from api.send_message import router as send_message_router
 from api.meta_connect import router as meta_connect_router
 from config import settings
+from domain.notification_job import run_notification_job
 
 # ── Logging ──────────────────────────────────────────────
 logging.basicConfig(
@@ -19,12 +22,23 @@ logging.basicConfig(
 logging.getLogger("domain.message_handler").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Inicia el job de notificaciones Odoo→WhatsApp en background."""
+    task = asyncio.create_task(run_notification_job())
+    logger.info("NotificationJob: background task iniciado")
+    yield
+    task.cancel()
+    logger.info("NotificationJob: background task detenido")
+
+
 # ── App ───────────────────────────────────────────────────
 app = FastAPI(
     title="NODIA WhatsApp AI SaaS",
     description="Backend multi-tenant para agentes IA en WhatsApp",
     version="1.0.0",
     docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
+    lifespan=lifespan,
 )
 
 # ── CORS (permitir panel Next.js) ─────────────────────────

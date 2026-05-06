@@ -76,7 +76,7 @@ async def handle_odoo_webhook(tenant_id: str, request: Request):
             await wa.send_template(
                 to=phone,
                 template_name=template_name,
-                lang="es_CO",
+                lang="es",
                 components=components,
             )
             logger.info(f"[{negocio}] Template '{template_name}' enviado a {phone}")

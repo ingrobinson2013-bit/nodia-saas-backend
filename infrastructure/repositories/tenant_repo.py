@@ -40,3 +40,19 @@ class TenantRepository:
             .execute()
         )
         return result.data if result.data else None
+
+    def get_all_active_with_odoo(self) -> list:
+        """
+        Devuelve todos los tenants activos que tienen Odoo configurado.
+        Usado por el notification_job para el polling multi-tenant.
+        """
+        db = get_supabase()
+        result = (
+            db.table("tenants")
+            .select("*")
+            .eq("activo", True)
+            .not_.is_("odoo_url", "null")
+            .not_.is_("odoo_api_key", "null")
+            .execute()
+        )
+        return result.data or []
