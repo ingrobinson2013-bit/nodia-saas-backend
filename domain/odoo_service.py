@@ -302,3 +302,52 @@ class OdooService:
         except Exception as e:
             logger.error(f"Error consultando citas cliente {partner_id}: {e}")
             return []
+
+    def get_recent_events(self, since_minutes: int = 2) -> list:
+        """
+        Devuelve calendar.event creados en los ultimos N minutos.
+        Usado por el notification_job para detectar citas manuales en Odoo.
+        """
+        if not self.uid:
+            return []
+        try:
+            now_utc = datetime.utcnow()
+            since_utc = (now_utc - timedelta(minutes=since_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+
+            events = self._execute(
+                "calendar.event", "search_read",
+                [[["create_date", ">=", since_utc], ["active", "=", True]]],
+                {"fields": ["id", "name", "start", "partner_ids", "description"]},
+            )
+            if not events:
+                return []
+
+            result = []
+            for ev in events:
+                partner_ids = ev.get("partner_ids", [])
+                ev["partner_name"] = "Cliente"
+                ev["phone"] = ""
+                if partner_ids:
+                    partners = self._execute(
+                        "res.partner", "read",
+                        [partner_ids],
+                        {"fields": ["name", "phone", "mobile"]},
+                    )
+                    if partners:
+                        p = partners[0]
+                        ev["partner_name"] = p.get("name", "Cliente")
+                        ev["phone"] = (p.get("mobile") or p.get("phone") or "").replace(" ", "").replace("+", "")
+
+                # Convertir start UTC → Bogota
+                try:
+                    start_dt = datetime.strptime(ev["start"], "%Y-%m-%d %H:%M:%S")
+                    start_bta = start_dt - timedelta(hours=BOGOTA_UTC_OFFSET_HOURS)
+                    ev["start_bogota"] = start_bta.strftime("%d/%m/%Y a las %I:%M %p")
+                except Exception:
+                    ev["start_bogota"] = ev.get("start", "")
+
+                result.append(ev)
+            return result
+        except Exception as e:
+            logger.error(f"Error consultando eventos recientes Odoo: {e}")
+            return []
