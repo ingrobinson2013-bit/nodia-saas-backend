@@ -23,8 +23,8 @@ from domain.whatsapp_service import WhatsAppService
 logger = logging.getLogger(__name__)
 tenant_repo = TenantRepository()
 
-POLL_INTERVAL_SECONDS = 300   # cada 5 minutos
-LOOKBACK_MINUTES      = 10    # buscar eventos creados en los ultimos 10 min (margen de seguridad)
+POLL_INTERVAL_SECONDS = 30    # polling cada 30 segundos → notificacion casi instantanea
+LOOKBACK_MINUTES      = 2     # buscar eventos creados en los ultimos 2 min (margen vs 30s)
 
 
 async def run_notification_job():
