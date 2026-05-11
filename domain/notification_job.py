@@ -141,10 +141,9 @@ async def _process_tenant(tenant: dict):
                     {
                         "type": "body",
                         "parameters": [
-                            {"type": "text", "text": nombre_cliente},
-                            {"type": "text", "text": fecha_str},
-                            {"type": "text", "text": servicio},
-                            {"type": "text", "text": nombre},
+                            {"type": "text", "text": nombre_cliente},  # {{1}} Hola {{1}}
+                            {"type": "text", "text": fecha_str},        # {{2}} fecha
+                            {"type": "text", "text": servicio},         # {{3}} servicio
                         ]
                     }
                 ]
