@@ -60,11 +60,16 @@ class OdooService:
     """
 
     def __init__(self, url: str, db: str, user: str, api_key: str):
-        self.url = url.rstrip("/")
-        self.db = db
-        self.user = user
-        self.api_key = api_key
+        # Sanitizar URL: eliminar \n, \r, espacios y caracteres no imprimibles
+        # que se cuelan al copiar/pegar en Supabase y rompen httpx
+        self.url = "".join(c for c in (url or "").strip() if c.isprintable()).rstrip("/")
+        self.db  = (db or "").strip()
+        self.user = (user or "").strip()
+        self.api_key = (api_key or "").strip()
         self.uid = None
+        if not self.url:
+            logger.error("❌ OdooService: odoo_url vacía o inválida — skip auth")
+            return
         self._authenticate()
 
     def _jsonrpc(self, service: str, method: str, args: list) -> dict:
@@ -314,11 +319,14 @@ class OdooService:
             now_utc = datetime.utcnow()
             since_utc = (now_utc - timedelta(minutes=since_minutes)).strftime("%Y-%m-%d %H:%M:%S")
 
+            logger.info(f"OdooService.get_recent_events: buscando desde {since_utc} UTC (ventana={since_minutes}min)")
+
             events = self._execute(
                 "calendar.event", "search_read",
                 [[["create_date", ">=", since_utc], ["active", "=", True]]],
                 {"fields": ["id", "name", "start", "partner_ids", "description"]},
             )
+            logger.info(f"OdooService.get_recent_events: Odoo devolvió {len(events) if events else 0} eventos")
             if not events:
                 return []
 

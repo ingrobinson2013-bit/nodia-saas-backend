@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 tenant_repo = TenantRepository()
 
 POLL_INTERVAL_SECONDS = 30    # polling cada 30 segundos → notificacion casi instantanea
-LOOKBACK_MINUTES      = 2     # buscar eventos creados en los ultimos 2 min (margen vs 30s)
+LOOKBACK_MINUTES      = 5     # buscar eventos creados en los ultimos 5 min (margen seguro)
 
 
 async def run_notification_job():
@@ -83,6 +83,7 @@ async def _process_tenant(tenant: dict):
 
     # Obtener eventos recientes
     recent = odoo.get_recent_events(since_minutes=LOOKBACK_MINUTES)
+    logger.info(f"NotificationJob [{nombre}]: {len(recent)} eventos recientes en Odoo (ventana={LOOKBACK_MINUTES}min)")
     if not recent:
         return
 
@@ -99,8 +100,10 @@ async def _process_tenant(tenant: dict):
         # Evitar re-enviar (los creados por el bot ya tienen "AgenteIA VALE" en descripcion)
         descripcion = ev.get("description", "") or ""
         if "AgenteIA VALE" in descripcion:
-            logger.debug(f"NotificationJob [{nombre}]: event {event_id} ya fue del bot, skip")
+            logger.info(f"NotificationJob [{nombre}]: event {event_id} es del bot, skip")
             continue
+
+        logger.info(f"NotificationJob [{nombre}]: event {event_id} | cliente={ev.get('partner_name')} | phone={ev.get('phone')} | fecha={ev.get('start_bogota')}")
 
         if not phone or len(phone) < 10:
             logger.debug(f"NotificationJob [{nombre}]: event {event_id} sin telefono, skip")
