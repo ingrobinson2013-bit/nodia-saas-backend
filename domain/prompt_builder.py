@@ -236,6 +236,7 @@ def inject_dynamic_context(
     tenant: dict,
     citas_cliente: list = None,
     citas_negocio: list = None,
+    profesionales: list = None,
 ) -> str:
     """
     Toma el prompt personalizado del tenant (almacenado en Supabase)
@@ -248,8 +249,13 @@ def inject_dynamic_context(
     citas_cliente_texto = _format_citas_cliente(citas_cliente)
     citas_negocio_texto = _format_citas_negocio(citas_negocio)
     tenant_id = tenant.get("tenant_id", "")
+    
+    profesionales_texto = ", ".join(profesionales) if profesionales else "Cualquiera"
 
     dynamic_block = f"""
+
+PROFESIONALES DISPONIBLES:
+{profesionales_texto}
 
 CITAS DE ESTE CLIENTE (ACTUALIZADO EN TIEMPO REAL)
 {citas_cliente_texto}
