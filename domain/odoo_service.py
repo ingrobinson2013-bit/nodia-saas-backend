@@ -215,6 +215,7 @@ class OdooService:
                 "stop": stop_utc,
                 "duration": dur_hours,
                 "description": desc_full,
+                "booking_state": "confirmed",
             }
             if partner_id:
                 event_data["partner_ids"] = [(4, partner_id)]
