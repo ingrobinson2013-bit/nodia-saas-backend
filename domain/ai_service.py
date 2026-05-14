@@ -75,9 +75,13 @@ TOOL_CREATE_APPOINTMENT = {
                 "hora": {
                     "type": "string",
                     "description": "Hora de la cita en formato HH:MM de 24h (hora Bogotá, ej: 09:00, 14:30)"
+                },
+                "profesional_nombre": {
+                    "type": "string",
+                    "description": "Nombre del profesional seleccionado por el cliente (ej: Carlos Mendez). Si el cliente no eligió o le da igual, envía 'Cualquiera'."
                 }
             },
-            "required": ["cliente_nombre", "servicio", "precio", "fecha", "hora"]
+            "required": ["cliente_nombre", "servicio", "precio", "fecha", "hora", "profesional_nombre"]
         }
     }
 }
@@ -165,6 +169,7 @@ class AIService:
                                 price=fn_args.get("precio", ""),
                                 negocio_servicios=negocio_servicios,
                                 description="Agendado via WhatsApp Bot NODIA",
+                                professional_name=fn_args.get("profesional_nombre", ""),
                             )
                             if event_id:
                                 logger.info(

@@ -286,7 +286,7 @@ class OdooService:
             events = self._execute(
                 "calendar.event", "search_read",
                 [[["start", ">=", start_utc], ["start", "<=", end_utc], ["active", "=", True]]],
-                {"fields": ["name", "start", "stop", "duration"]},
+                {"fields": ["name", "start", "stop", "duration", "professional_id"]},
             )
             return events or []
         except Exception as e:
@@ -307,6 +307,40 @@ class OdooService:
             return events or []
         except Exception as e:
             logger.error(f"Error consultando citas cliente {partner_id}: {e}")
+            return []
+
+    def get_professionals(self) -> list:
+        """Devuelve los profesionales activos en Odoo (con caché simple)."""
+        if not self.uid:
+            return []
+        
+        global _PROFESSIONALS_CACHE, _PROFESSIONALS_CACHE_TIME
+        if '_PROFESSIONALS_CACHE' not in globals():
+            _PROFESSIONALS_CACHE = {}
+            _PROFESSIONALS_CACHE_TIME = {}
+            
+        now = datetime.now()
+        cache_key = f"{self.url}_{self.db}"
+        
+        if cache_key in _PROFESSIONALS_CACHE and cache_key in _PROFESSIONALS_CACHE_TIME:
+            if (now - _PROFESSIONALS_CACHE_TIME[cache_key]).total_seconds() < 3600:
+                return _PROFESSIONALS_CACHE[cache_key]
+
+        try:
+            # Buscar en hr.employee o en res.users segun lo que use el modulo.
+            # En Odoo normalmente los profesionales de calendar son empleados o usuarios.
+            # Asumiremos hr.employee ya que el field inspeccionado es hr.employee.
+            employees = self._execute(
+                "hr.employee", "search_read",
+                [[["active", "=", True]]],
+                {"fields": ["id", "name"]}
+            )
+            result = employees or []
+            _PROFESSIONALS_CACHE[cache_key] = result
+            _PROFESSIONALS_CACHE_TIME[cache_key] = now
+            return result
+        except Exception as e:
+            logger.error(f"Error consultando profesionales en Odoo: {e}")
             return []
 
     def get_recent_events(self, since_minutes: int = 2) -> list:

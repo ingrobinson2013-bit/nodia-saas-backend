@@ -1,4 +1,4 @@
-﻿# domain/message_handler.py
+# domain/message_handler.py
 # Orquestador principal — alineado con schema real de chat_sessions
 #
 # Schema chat_sessions:
@@ -139,6 +139,13 @@ class MessageHandler:
         # -- 9. Construir prompt con contexto dinamico -----------------------
         from domain.prompt_builder import build_system_prompt, inject_dynamic_context
 
+        profesionales = []
+        if odoo_config:
+            from domain.odoo_service import OdooService
+            odoo_svc = OdooService(**odoo_config)
+            profesionales_odoo = odoo_svc.get_professionals()
+            profesionales = [p.get("name") for p in profesionales_odoo if p.get("name")]
+
         ai_prompt_manual = tenant.get("ai_prompt") or ""
         if ai_prompt_manual and len(ai_prompt_manual.strip()) > 50:
             system_prompt = inject_dynamic_context(
@@ -146,6 +153,7 @@ class MessageHandler:
                 tenant=tenant,
                 citas_cliente=citas_cliente,
                 citas_negocio=citas_negocio,
+                profesionales=profesionales,
             )
         else:
             system_prompt = build_system_prompt(
@@ -153,6 +161,7 @@ class MessageHandler:
                 tenant_config=tenant_config,
                 citas_cliente=citas_cliente,
                 citas_negocio=citas_negocio,
+                profesionales=profesionales,
             )
 
         # -- 10. Llamar a la IA (con tool calling para check/create appointment) --
