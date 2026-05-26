@@ -323,7 +323,11 @@ class MessageHandler:
                         cita = cita_result.data[0]
                         new_start_dt = f"{new_date} {new_time}:00"
                         if cita.get("odoo_event_id"):
-                            odoo.reschedule_appointment(int(cita["odoo_event_id"]), new_start_dt)
+                            odoo.reschedule_appointment(
+                                event_id=int(cita["odoo_event_id"]),
+                                date_str=new_date,
+                                time_str=new_time,
+                            )
                         db.table("citas_log").update({
                             "fecha_cita": new_date,
                             "hora_cita":  f"{new_time}:00",
