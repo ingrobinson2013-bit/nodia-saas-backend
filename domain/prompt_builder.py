@@ -58,7 +58,8 @@ def _build_calendar_block(now_bogota: datetime, weekday_map: dict) -> tuple:
 
 
 def build_system_prompt(tenant: dict, tenant_config: dict,
-                        citas_cliente: list = None, citas_negocio: list = None) -> str:
+                        citas_cliente: list = None, citas_negocio: list = None,
+                        profesionales: list = None) -> str:
     """
     Genera el system prompt completo para VALE usando los datos del tenant.
 

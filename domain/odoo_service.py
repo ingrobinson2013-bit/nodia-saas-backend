@@ -168,6 +168,7 @@ class OdooService:
         price: str = "",
         negocio_servicios: str = "",
         description: str = "",
+        professional_name: str = "",
     ) -> int | None:
         """
         Crea una cita en Odoo convirtiendo hora Bogotá → UTC.
@@ -203,11 +204,23 @@ class OdooService:
             # 5. Nombre del evento igual que en n8n: "Servicio - Nombre"
             event_name = f"{service_name} - {name}" if service_name else f"Cita WhatsApp: {name}"
             precio_desc = f" | Valor: {price}" if price else ""
+            
+            # 5b. Agregar profesional a la descripción si aplica
+            profesional_desc = f" | Profesional: {professional_name}" if professional_name else ""
             desc_full = (
-                f"Reserva WhatsApp | Tel: {phone} | Origen: AgenteIA VALE{precio_desc}"
+                f"Reserva WhatsApp | Tel: {phone} | Origen: AgenteIA VALE{precio_desc}{profesional_desc}"
             )
             if description:
                 desc_full += f"\n{description}"
+
+            # 6. Buscar ID del profesional
+            professional_id = None
+            if professional_name and professional_name.lower() != "cualquiera":
+                pro_list = self.get_professionals()
+                for p in pro_list:
+                    if p.get("name", "").lower() == professional_name.lower():
+                        professional_id = p.get("id")
+                        break
 
             event_data = {
                 "name": event_name,
@@ -219,11 +232,13 @@ class OdooService:
             }
             if partner_id:
                 event_data["partner_ids"] = [(4, partner_id)]
+            if professional_id:
+                event_data["professional_id"] = professional_id
 
             event_id = self._execute("calendar.event", "create", [event_data])
             logger.info(
                 f"✅ Odoo: cita creada event_id={event_id} — '{event_name}' "
-                f"Bogotá={date_str} {time_str} / UTC={start_utc}"
+                f"Bogotá={date_str} {time_str} / UTC={start_utc} | Profesional={professional_name} (id={professional_id})"
             )
             return event_id
         except Exception as e:
