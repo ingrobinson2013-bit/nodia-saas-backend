@@ -235,14 +235,28 @@ class OdooService:
             if professional_id:
                 event_data["professional_id"] = professional_id
 
-            event_id = self._execute("calendar.event", "create", [event_data])
+            try:
+                event_id = self._execute("calendar.event", "create", [event_data])
+            except Exception as e:
+                if "booking_state" in str(e) and "booking_state" in event_data:
+                    logger.warning("Odoo: 'booking_state' no es un campo válido en calendar.event. Reintentando creación sin él...")
+                    del event_data["booking_state"]
+                    try:
+                        event_id = self._execute("calendar.event", "create", [event_data])
+                    except Exception as retry_err:
+                        logger.error(f"❌ Error al reintentar creación en Odoo sin booking_state: {retry_err}")
+                        return None
+                else:
+                    logger.error(f"❌ Error creando cita en Odoo: {e}")
+                    return None
+
             logger.info(
                 f"✅ Odoo: cita creada event_id={event_id} — '{event_name}' "
                 f"Bogotá={date_str} {time_str} / UTC={start_utc} | Profesional={professional_name} (id={professional_id})"
             )
             return event_id
         except Exception as e:
-            logger.error(f"❌ Error creando cita en Odoo: {e}")
+            logger.error(f"❌ Error general en create_appointment: {e}")
             return None
 
     def cancel_appointment(self, event_id: int) -> bool:
