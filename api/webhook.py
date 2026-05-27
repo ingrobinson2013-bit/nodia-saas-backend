@@ -63,6 +63,11 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 logger.info("⚠️ No hay mensajes en este change (status update), ignorado")
                 continue
 
+            contacts = value.get("contacts", [])
+            sender_name = None
+            if contacts:
+                sender_name = contacts[0].get("profile", {}).get("name")
+
             for msg in messages:
                 msg_type = msg.get("type")
                 logger.info(f"📨 Tipo={msg_type} | from={msg.get('from')}")
@@ -75,7 +80,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 message_text = msg["text"]["body"]
                 message_id   = msg["id"]
 
-                logger.info(f"✉️  Procesando: '{message_text[:80]}' de {sender_wa_id}")
+                logger.info(f"✉️  Procesando: '{message_text[:80]}' de {sender_wa_id} (nombre={sender_name})")
 
                 # Procesar en background para responder 200 a Meta de inmediato
                 # Meta reintenta si no recibe 200 en < 5 segundos
@@ -85,6 +90,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                     sender_wa_id=sender_wa_id,
                     message_text=message_text,
                     message_id=message_id,
+                    sender_name=sender_name,
                 )
 
     return {"status": "ok"}

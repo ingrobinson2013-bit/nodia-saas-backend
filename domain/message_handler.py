@@ -373,7 +373,14 @@ class MessageHandler:
                 .execute()
             )
             if result.data:
-                return result.data
+                existing = result.data
+                if not existing.get("name") and name:
+                    try:
+                        db.table("chat_sessions").update({"name": name}).eq("id", existing["id"]).execute()
+                        existing["name"] = name
+                    except Exception as ue:
+                        logger.warning(f"Error actualizando nombre en sesion existente: {ue}")
+                return existing
         except Exception:
             pass
 
