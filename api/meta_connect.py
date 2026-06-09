@@ -48,24 +48,32 @@ async def meta_connect(req: MetaConnectRequest):
         })
         waba_data = waba_res.json()
 
-        # Extraer primer phone_number_id disponible
+        # Extraer primer phone_number_id y waba_id disponible
         phone_number_id = None
+        waba_id = None
         try:
             waba = waba_data["data"][0]
-            phones = waba["whatsapp_business_accounts"]["data"][0]["phone_numbers"]["data"]
-            phone_number_id = phones[0]["id"]
+            waba_accounts = waba.get("whatsapp_business_accounts", {}).get("data", [])
+            if waba_accounts:
+                waba_account = waba_accounts[0]
+                waba_id = waba_account.get("id")
+                phones = waba_account.get("phone_numbers", {}).get("data", [])
+                if phones:
+                    phone_number_id = phones[0].get("id")
         except (KeyError, IndexError) as e:
-            logger.warning(f"No se pudo extraer phone_number_id: {e}")
+            logger.warning(f"No se pudo extraer phone_number_id o waba_id: {e}")
 
         # ── 3. Guardar en tenants ──────────────────────────
         db = get_supabase()
         update_data = {"wa_access_token": access_token}
         if phone_number_id:
             update_data["wa_phone_id"] = phone_number_id
+        if waba_id:
+            update_data["waba_id"] = waba_id
 
         db.table("tenants").update(update_data).eq("tenant_id", req.tenant_id).execute()
 
-        logger.info(f"Tenant {req.tenant_id} conectó WhatsApp: phone_id={phone_number_id}")
+        logger.info(f"Tenant {req.tenant_id} conectó WhatsApp: phone_id={phone_number_id} | waba_id={waba_id}")
         return {
             "status": "connected",
             "phone_number_id": phone_number_id,
