@@ -499,6 +499,19 @@ class MessageHandler:
                 if booking_data.get("cliente_nombre"):
                     prospect_name = booking_data.get("cliente_nombre")
 
+            # 2.5 Variables auxiliares para el HTML y Renders (evita bugs de f-string)
+            badge_class = "badge-demo" if event_type == "demo_scheduled" else "badge-escalate"
+            badge_text = "Demo Agendada en Calendario" if event_type == "demo_scheduled" else "Solicitud de Contacto / Asesor"
+            
+            nit_html = ""
+            if nit_rut and nit_rut != "No especificado":
+                nit_html = f"""
+                <div class="info-item">
+                    <div class="info-label">NIT / RUT</div>
+                    <div class="info-value">{nit_rut}</div>
+                </div>
+                """
+
             # 3. Construir cuerpo del correo en HTML
             html_body = f"""
             <!DOCTYPE html>
@@ -633,12 +646,12 @@ class MessageHandler:
                 <div class="container">
                     <div class="header">
                         <h1>{event_title}</h1>
-                        <p>Plataforma BeautySync Pro — Ventas</p>
+                        <p>BeautySync Pro por TESO CONSULTING SAS</p>
                     </div>
                     <div class="content">
                         <div style="text-align: center;">
-                            <span class="badge {{'badge-demo' if event_type == 'demo_scheduled' else 'badge-escalate'}}">
-                                {{ 'Demo Agendada en Calendario' if event_type == 'demo_scheduled' else 'Solicitud de Contacto / Asesor' }}
+                            <span class="badge {badge_class}">
+                                {badge_text}
                             </span>
                         </div>
                         
@@ -668,10 +681,7 @@ class MessageHandler:
                                 <div class="info-label">Plan de Interés</div>
                                 <div class="info-value">{plan_interes}</div>
                             </div>
-                            {{f'''<div class="info-item">
-                                <div class="info-label">NIT / RUT</div>
-                                <div class="info-value">{{nit_rut}}</div>
-                            </div>''' if nit_rut and nit_rut != "No especificado" else ""}}
+                            {nit_html}
                         </div>
 
                         <div class="section-title">Resumen de Intención</div>
@@ -694,8 +704,8 @@ class MessageHandler:
             html_body += """</div>
                     </div>
                     <div class="footer">
-                        Este correo es una alerta automática generada por el agente de ventas de BeautySync Pro.<br>
-                        © 2026 NODIA. Todos los derechos reservados.
+                        Este correo es una alerta automática de BeautySync Pro, una solución respaldada y operada por TESO CONSULTING SAS.<br>
+                        © 2026 TESO CONSULTING SAS. Todos los derechos reservados.
                     </div>
                 </div>
             </body>
