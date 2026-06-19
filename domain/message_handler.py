@@ -499,20 +499,20 @@ class MessageHandler:
                 if booking_data.get("cliente_nombre"):
                     prospect_name = booking_data.get("cliente_nombre")
 
-            # 2.5 Variables auxiliares para el HTML y Renders (evita bugs de f-string)
+            # 3. Construir variables dinámicas para evitar errores de parseo en el f-string principal
             badge_class = "badge-demo" if event_type == "demo_scheduled" else "badge-escalate"
-            badge_text = "Demo Agendada en Calendario" if event_type == "demo_scheduled" else "Solicitud de Contacto / Asesor"
+            badge_label = "Demo Agendada en Calendario" if event_type == "demo_scheduled" else "Solicitud de Contacto / Asesor"
             
-            nit_html = ""
+            nit_section = ""
             if nit_rut and nit_rut != "No especificado":
-                nit_html = f"""
+                nit_section = f"""
                 <div class="info-item">
                     <div class="info-label">NIT / RUT</div>
                     <div class="info-value">{nit_rut}</div>
                 </div>
                 """
 
-            # 3. Construir cuerpo del correo en HTML
+            # 4. Construir cuerpo del correo en HTML
             html_body = f"""
             <!DOCTYPE html>
             <html>
@@ -646,12 +646,12 @@ class MessageHandler:
                 <div class="container">
                     <div class="header">
                         <h1>{event_title}</h1>
-                        <p>BeautySync Pro por TESO CONSULTING SAS</p>
+                        <p>Plataforma BeautySync Pro — TESO CONSULTING SAS</p>
                     </div>
                     <div class="content">
                         <div style="text-align: center;">
                             <span class="badge {badge_class}">
-                                {badge_text}
+                                {badge_label}
                             </span>
                         </div>
                         
@@ -681,7 +681,7 @@ class MessageHandler:
                                 <div class="info-label">Plan de Interés</div>
                                 <div class="info-value">{plan_interes}</div>
                             </div>
-                            {nit_html}
+                            {nit_section}
                         </div>
 
                         <div class="section-title">Resumen de Intención</div>
@@ -698,13 +698,14 @@ class MessageHandler:
 
             # Agregar el historial
             for msg in history[-12:]:
-                role_label = "Cliente" if msg.get("role") == "user" else "VALE (IA)"
+                role_label = "Cliente" if msg.get("role") == "user" else "BEAUTY (IA)"
                 html_body += f"[{role_label}]: {msg.get('content')}\n\n"
 
             html_body += """</div>
                     </div>
                     <div class="footer">
-                        Este correo es una alerta automática de BeautySync Pro, una solución respaldada y operada por TESO CONSULTING SAS.<br>
+                        Este correo es una alerta automática generada por el agente de ventas de BeautySync Pro.<br>
+                        Desarrollado y respaldado por <strong>TESO CONSULTING SAS</strong>.<br>
                         © 2026 TESO CONSULTING SAS. Todos los derechos reservados.
                     </div>
                 </div>
