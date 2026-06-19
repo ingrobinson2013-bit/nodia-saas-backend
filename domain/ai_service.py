@@ -229,3 +229,62 @@ class AIService:
         except Exception as e:
             logger.error(f"OpenAI error: {e}")
             return "En este momento tengo un problema técnico. Un asesor te contactará pronto.", None
+
+    async def extract_lead_details(self, history: list) -> dict:
+        """
+        Analiza el historial de conversación y extrae detalles estructurados del prospecto usando GPT.
+        """
+        if not history:
+            return {}
+
+        # Formatear el historial en texto plano
+        history_text = ""
+        for msg in history:
+            role_label = "Cliente" if msg.get("role") == "user" else "Asesora (VALE)"
+            history_text += f"{role_label}: {msg.get('content')}\n"
+
+        prompt = (
+            "Eres un extractor de datos analítico y preciso. Tu tarea es analizar el historial de conversación "
+            "de un bot de ventas de WhatsApp y extraer la siguiente información del prospecto en formato JSON. "
+            "Sé preciso. Si no encuentras la información de algún campo, devuélvelo como null (o un string vacío).\n\n"
+            "Campos a extraer:\n"
+            "1. nombre: Nombre de la persona / prospecto.\n"
+            "2. negocio: Nombre del negocio, estética, peluquería o barbería.\n"
+            "3. tipo_negocio: Tipo de negocio (Barbería, Peluquería, Salón de Belleza, Spa, Estética, etc.).\n"
+            "4. inversion_insumos: Inversión aproximada mensual en insumos/productos en COP.\n"
+            "5. plan_interes: Plan seleccionado o de interés (ej: 'Básico', 'Pro', 'Demo').\n"
+            "6. email: Correo electrónico proporcionado.\n"
+            "7. telefono: Número de contacto si lo menciona diferente al de origen.\n"
+            "8. nit_rut: NIT o RUT si lo menciona.\n"
+            "9. resumen_interes: Un resumen de una frase sobre qué le interesa al cliente.\n\n"
+            "Responde ÚNICAMENTE con el objeto JSON válido. El formato del JSON debe ser exactamente:\n"
+            "{\n"
+            "  \"nombre\": \"...\",\n"
+            "  \"negocio\": \"...\",\n"
+            "  \"tipo_negocio\": \"...\",\n"
+            "  \"inversion_insumos\": \"...\",\n"
+            "  \"plan_interes\": \"...\",\n"
+            "  \"email\": \"...\",\n"
+            "  \"telefono\": \"...\",\n"
+            "  \"nit_rut\": \"...\",\n"
+            "  \"resumen_interes\": \"...\"\n"
+            "}"
+        )
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": f"Historial de conversación:\n{history_text}"}
+                ],
+                max_tokens=300,
+                temperature=0.0,
+                response_format={"type": "json_object"}
+            )
+            raw_json = response.choices[0].message.content.strip()
+            return json.loads(raw_json)
+        except Exception as e:
+            logger.error(f"Error al extraer detalles del lead con OpenAI: {e}")
+            return {}
+

@@ -13,6 +13,7 @@
 import logging
 import json
 import re
+import asyncio
 from datetime import datetime, timezone
 from infrastructure.repositories.tenant_repo import TenantRepository
 from domain.ai_service import AIService
@@ -356,6 +357,29 @@ class MessageHandler:
         new_history = new_history[-(MAX_HISTORY * 2):]
         self._update_session(db, session["id"], new_history)
 
+        # -- 16. Enviar notificación de correo para lead calificado (exclusivo ventas) --
+        from config import settings
+        if str(tenant_id) == settings.SALES_TENANT_ID:
+            if booking_data:
+                asyncio.create_task(
+                    self._send_lead_email_notification(
+                        tenant=tenant,
+                        session=session,
+                        history=new_history,
+                        event_type="demo_scheduled",
+                        booking_data=booking_data
+                    )
+                )
+            elif crm_action and crm_action.get("action") == "ESCALATE":
+                asyncio.create_task(
+                    self._send_lead_email_notification(
+                        tenant=tenant,
+                        session=session,
+                        history=new_history,
+                        event_type="escalation_requested"
+                    )
+                )
+
         logger.info(f"[{tenant['nombre']}] Respuesta enviada a {sender_wa_id}")
 
     # -------------------------------------------------------------------------
@@ -428,3 +452,263 @@ class MessageHandler:
         except Exception as e:
             logger.warning(f"No se pudo parsear accion CRM: {e}")
         return None
+
+    async def _send_lead_email_notification(
+        self,
+        tenant: dict,
+        session: dict,
+        history: list,
+        event_type: str,
+        booking_data: dict = None
+    ):
+        """
+        Envía un correo electrónico con los datos de un lead calificado.
+        Solo se ejecuta si el tenant es el del embudo de ventas.
+        """
+        from config import settings
+        from domain.ai_service import AIService
+        from infrastructure.email_service import EmailService
+
+        logger.info(f"[{tenant['nombre']}] Lead calificado detectado. Iniciando extracción de datos y envío de email...")
+
+        try:
+            # 1. Extraer detalles estructurados usando GPT
+            ai = AIService()
+            lead_details = await ai.extract_lead_details(history)
+
+            # 2. Preparar los datos
+            prospect_name = lead_details.get("nombre") or session.get("name") or "Desconocido"
+            negocio_name = lead_details.get("negocio") or "No especificado"
+            tipo_negocio = lead_details.get("tipo_negocio") or "No especificado"
+            inversion_insumos = lead_details.get("inversion_insumos") or "No especificada"
+            plan_interes = lead_details.get("plan_interes") or "No especificado"
+            email = lead_details.get("email") or "No especificado"
+            telefono_contacto = lead_details.get("telefono") or "No especificado"
+            nit_rut = lead_details.get("nit_rut") or "No especificado"
+            resumen = lead_details.get("resumen_interes") or "Lead calificado en el embudo."
+
+            wa_number = session.get("wa_from", "")
+            wa_link = f"https://wa.me/{wa_number}" if wa_number else "#"
+
+            # Si es por agendamiento de cita/demo, enriquecer con booking_data
+            event_title = "🔥 ¡Nuevo Lead Calificado detectado!"
+            if event_type == "demo_scheduled" and booking_data:
+                event_title = "📅 ¡Nueva Demo Agendada!"
+                if not plan_interes or plan_interes == "No especificado":
+                    plan_interes = "Demo"
+                if booking_data.get("cliente_nombre"):
+                    prospect_name = booking_data.get("cliente_nombre")
+
+            # 3. Construir cuerpo del correo en HTML
+            html_body = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <style>
+                    body {{
+                        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                        background-color: #f4f6f9;
+                        color: #333333;
+                        margin: 0;
+                        padding: 0;
+                    }}
+                    .container {{
+                        max-width: 600px;
+                        margin: 20px auto;
+                        background: #ffffff;
+                        border-radius: 12px;
+                        overflow: hidden;
+                        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+                        border: 1px solid #e1e8ed;
+                    }}
+                    .header {{
+                        background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+                        color: #ffffff;
+                        padding: 30px 20px;
+                        text-align: center;
+                    }}
+                    .header h1 {{
+                        margin: 0;
+                        font-size: 24px;
+                        font-weight: 700;
+                        letter-spacing: 0.5px;
+                    }}
+                    .header p {{
+                        margin: 5px 0 0 0;
+                        font-size: 14px;
+                        opacity: 0.9;
+                    }}
+                    .content {{
+                        padding: 30px 25px;
+                    }}
+                    .badge {{
+                        display: inline-block;
+                        padding: 6px 12px;
+                        font-size: 12px;
+                        font-weight: bold;
+                        border-radius: 20px;
+                        text-transform: uppercase;
+                        margin-bottom: 20px;
+                    }}
+                    .badge-demo {{
+                        background-color: #e3f2fd;
+                        color: #0d47a1;
+                    }}
+                    .badge-escalate {{
+                        background-color: #efebe9;
+                        color: #4e342e;
+                    }}
+                    .section-title {{
+                        font-size: 16px;
+                        font-weight: bold;
+                        border-bottom: 2px solid #f0f2f5;
+                        padding-bottom: 8px;
+                        margin-top: 25px;
+                        margin-bottom: 15px;
+                        color: #1a1a1a;
+                    }}
+                    .info-grid {{
+                        display: grid;
+                        grid-template-columns: 1fr;
+                        gap: 12px;
+                    }}
+                    .info-item {{
+                        padding: 10px 12px;
+                        background-color: #f8fafc;
+                        border-radius: 6px;
+                        border-left: 3px solid #cbd5e1;
+                    }}
+                    .info-label {{
+                        font-size: 11px;
+                        text-transform: uppercase;
+                        color: #64748b;
+                        font-weight: bold;
+                        margin-bottom: 2px;
+                    }}
+                    .info-value {{
+                        font-size: 14px;
+                        color: #0f172a;
+                        font-weight: 500;
+                    }}
+                    .btn-whatsapp {{
+                        display: block;
+                        text-align: center;
+                        background-color: #25d366;
+                        color: #ffffff;
+                        text-decoration: none;
+                        padding: 14px 20px;
+                        border-radius: 8px;
+                        font-weight: bold;
+                        margin: 30px 0 10px 0;
+                        box-shadow: 0 4px 10px rgba(37,211,102,0.2);
+                        transition: background-color 0.2s;
+                    }}
+                    .btn-whatsapp:hover {{
+                        background-color: #128c7e;
+                    }}
+                    .history-box {{
+                        background-color: #0f172a;
+                        color: #e2e8f0;
+                        padding: 15px;
+                        border-radius: 8px;
+                        font-family: 'Courier New', Courier, monospace;
+                        font-size: 12px;
+                        max-height: 250px;
+                        overflow-y: auto;
+                        white-space: pre-wrap;
+                        border: 1px solid #1e293b;
+                    }}
+                    .footer {{
+                        background-color: #f8fafc;
+                        padding: 20px;
+                        text-align: center;
+                        font-size: 11px;
+                        color: #94a3b8;
+                        border-top: 1px solid #e2e8f0;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>{event_title}</h1>
+                        <p>Plataforma BeautySync Pro — Ventas</p>
+                    </div>
+                    <div class="content">
+                        <div style="text-align: center;">
+                            <span class="badge {{'badge-demo' if event_type == 'demo_scheduled' else 'badge-escalate'}}">
+                                {{ 'Demo Agendada en Calendario' if event_type == 'demo_scheduled' else 'Solicitud de Contacto / Asesor' }}
+                            </span>
+                        </div>
+                        
+                        <div class="section-title">Datos del Prospecto</div>
+                        <div class="info-grid">
+                            <div class="info-item" style="border-left-color: #6a11cb;">
+                                <div class="info-label">Nombre del Cliente</div>
+                                <div class="info-value">{prospect_name}</div>
+                            </div>
+                            <div class="info-item" style="border-left-color: #2575fc;">
+                                <div class="info-label">Nombre del Negocio</div>
+                                <div class="info-value">{negocio_name} ({tipo_negocio})</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">WhatsApp</div>
+                                <div class="info-value">+{wa_number}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Email</div>
+                                <div class="info-value">{email}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Inversión Mensual en Insumos</div>
+                                <div class="info-value">{inversion_insumos}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Plan de Interés</div>
+                                <div class="info-value">{plan_interes}</div>
+                            </div>
+                            {{f'''<div class="info-item">
+                                <div class="info-label">NIT / RUT</div>
+                                <div class="info-value">{{nit_rut}}</div>
+                            </div>''' if nit_rut and nit_rut != "No especificado" else ""}}
+                        </div>
+
+                        <div class="section-title">Resumen de Intención</div>
+                        <p style="font-size: 14px; line-height: 1.5; color: #475569; margin: 0 0 20px 0;">
+                            {resumen}
+                        </p>
+
+                        <a href="{wa_link}" class="btn-whatsapp" target="_blank">
+                            💬 Chatear con {prospect_name} por WhatsApp
+                        </a>
+
+                        <div class="section-title">Historial Reciente de Conversación</div>
+                        <div class="history-box">"""
+
+            # Agregar el historial
+            for msg in history[-12:]:
+                role_label = "Cliente" if msg.get("role") == "user" else "VALE (IA)"
+                html_body += f"[{role_label}]: {msg.get('content')}\n\n"
+
+            html_body += """</div>
+                    </div>
+                    <div class="footer">
+                        Este correo es una alerta automática generada por el agente de ventas de BeautySync Pro.<br>
+                        © 2026 NODIA. Todos los derechos reservados.
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+
+            # 4. Enviar el correo electrónico
+            email_svc = EmailService()
+            
+            subject = f"🚨 Lead Calificado: {prospect_name} - {negocio_name}"
+            if event_type == "demo_scheduled":
+                subject = f"📅 Demo Agendada: {prospect_name} - {negocio_name}"
+
+            await email_svc.send_html_email(subject, html_body)
+        except Exception as ex:
+            logger.error(f"Error procesando la notificación de lead para el correo: {ex}", exc_info=True)

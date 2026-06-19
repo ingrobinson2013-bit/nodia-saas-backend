@@ -15,8 +15,18 @@ class Settings(BaseSettings):
     PORT: int = 8000
     ENVIRONMENT: str = "development"
 
+    # SMTP Configurations for Email Notifications
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_SENDER: str = ""  # e.g., "BeautySync Pro Alertas <alertas@beautysyncpro.app>"
+    NOTIFY_EMAIL: str = ""  # recipient for qualified leads
+    SALES_TENANT_ID: str = "3273dbab-9d62-4d3e-84ef-2d462b1ede0a"  # Exclusive tenant
+
     class Config:
         env_file = ".env"
 
 
 settings = Settings()
+
