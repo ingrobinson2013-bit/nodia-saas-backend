@@ -698,7 +698,7 @@ class MessageHandler:
 
             # Agregar el historial
             for msg in history[-12:]:
-                role_label = "Cliente" if msg.get("role") == "user" else "BEAUTY (IA)"
+                role_label = "Cliente" if msg.get("role") == "user" else "BETH (IA)"
                 html_body += f"[{role_label}]: {msg.get('content')}\n\n"
 
             html_body += """</div>
