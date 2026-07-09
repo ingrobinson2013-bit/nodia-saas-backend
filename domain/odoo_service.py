@@ -67,6 +67,7 @@ class OdooService:
         self.user = (user or "").strip()
         self.api_key = (api_key or "").strip()
         self.uid = None
+        self.professional_field_name = "professional_id"  # por defecto
         if not self.url:
             logger.error("❌ OdooService: odoo_url vacía o inválida — skip auth")
             return
@@ -114,6 +115,22 @@ class OdooService:
                 raise Exception(f"Auth fallida — resultado: {result}")
             self.uid = result
             logger.info(f"✅ Odoo JSON-RPC autenticado. uid={self.uid} db={self.db}")
+
+            # Detectar dinámicamente si el campo de profesional es 'professional_id' o 'spa_professional_id'
+            try:
+                fields = self._execute("calendar.event", "fields_get", [["professional_id"]], {"attributes": ["type"]})
+                if "professional_id" in fields:
+                    self.professional_field_name = "professional_id"
+            except Exception:
+                try:
+                    fields = self._execute("calendar.event", "fields_get", [["spa_professional_id"]], {"attributes": ["type"]})
+                    if "spa_professional_id" in fields:
+                        self.professional_field_name = "spa_professional_id"
+                except Exception as e_field:
+                    logger.warning(f"No se pudo detectar el campo de profesional en calendar.event (falló professional_id y spa_professional_id): {e_field}")
+                    self.professional_field_name = None
+            logger.info(f"Odoo: Campo de profesional detectado y configurado como: '{self.professional_field_name}'")
+
         except Exception as e:
             logger.error(f"❌ Error autenticando en Odoo: {e}")
             self.uid = None
@@ -232,8 +249,8 @@ class OdooService:
             }
             if partner_id:
                 event_data["partner_ids"] = [(4, partner_id)]
-            if professional_id:
-                event_data["professional_id"] = professional_id
+            if professional_id and self.professional_field_name:
+                event_data[self.professional_field_name] = professional_id
 
             try:
                 event_id = self._execute("calendar.event", "create", [event_data])
@@ -312,11 +329,22 @@ class OdooService:
             # El día en Bogotá empieza a las 05:00 UTC y termina a las 04:59 UTC del día siguiente
             start_utc = _bogota_to_utc(date_str, "00:00")
             end_utc   = _bogota_to_utc(date_str, "23:59")
+            fields_to_read = ["name", "start", "stop", "duration"]
+            if self.professional_field_name:
+                fields_to_read.append(self.professional_field_name)
+
             events = self._execute(
                 "calendar.event", "search_read",
                 [[["start", ">=", start_utc], ["start", "<=", end_utc], ["active", "=", True]]],
-                {"fields": ["name", "start", "stop", "duration", "professional_id"]},
+                {"fields": fields_to_read},
             )
+
+            # Normalizar para que el resto del sistema que asume 'professional_id' siga funcionando
+            if events and self.professional_field_name and self.professional_field_name != "professional_id":
+                for ev in events:
+                    if self.professional_field_name in ev:
+                        ev["professional_id"] = ev[self.professional_field_name]
+
             return events or []
         except Exception as e:
             logger.error(f"Error consultando disponibilidad Odoo: {e}")
