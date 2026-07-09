@@ -117,18 +117,23 @@ class OdooService:
             logger.info(f"✅ Odoo JSON-RPC autenticado. uid={self.uid} db={self.db}")
 
             # Detectar dinámicamente si el campo de profesional es 'professional_id' o 'spa_professional_id'
+            # IMPORTANTE: fields_get NO lanza excepción cuando un campo no existe — devuelve {} (dict vacío).
+            # Por eso reseteamos a None primero y consultamos ambos campos en una sola llamada.
+            self.professional_field_name = None
             try:
-                fields = self._execute("calendar.event", "fields_get", [["professional_id"]], {"attributes": ["type"]})
+                fields = self._execute(
+                    "calendar.event", "fields_get",
+                    [["professional_id", "spa_professional_id"]],
+                    {"attributes": ["type"]}
+                )
                 if "professional_id" in fields:
                     self.professional_field_name = "professional_id"
-            except Exception:
-                try:
-                    fields = self._execute("calendar.event", "fields_get", [["spa_professional_id"]], {"attributes": ["type"]})
-                    if "spa_professional_id" in fields:
-                        self.professional_field_name = "spa_professional_id"
-                except Exception as e_field:
-                    logger.warning(f"No se pudo detectar el campo de profesional en calendar.event (falló professional_id y spa_professional_id): {e_field}")
-                    self.professional_field_name = None
+                elif "spa_professional_id" in fields:
+                    self.professional_field_name = "spa_professional_id"
+                else:
+                    logger.warning("calendar.event: no se encontró ni 'professional_id' ni 'spa_professional_id' — se omitirá el profesional al crear citas")
+            except Exception as e_field:
+                logger.warning(f"No se pudo detectar el campo de profesional en calendar.event: {e_field}")
             logger.info(f"Odoo: Campo de profesional detectado y configurado como: '{self.professional_field_name}'")
 
         except Exception as e:
