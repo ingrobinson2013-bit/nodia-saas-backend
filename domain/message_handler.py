@@ -247,6 +247,16 @@ class MessageHandler:
                     "estado": "cita_confirmada",
                     "cita_odoo_id": new_odoo_id,
                 }).eq("id", session["id"]).execute()
+
+                # ── Email de notificación al dueño del negocio ──
+                try:
+                    await self._send_appointment_email_notification(
+                        tenant=tenant,
+                        booking_data=booking_data,
+                        phone=sender_wa_id,
+                    )
+                except Exception as email_err:
+                    logger.warning(f"[{tenant['nombre']}] Email de cita fallido (no crítico): {email_err}")
             except Exception as e:
                 logger.error(f"Error persistiendo citas_log: {e}")
 
@@ -453,6 +463,141 @@ class MessageHandler:
             logger.warning(f"No se pudo parsear accion CRM: {e}")
         return None
 
+    # ────────────────────────────────────────────────────────
+    # EMAIL: Notificación de CITA RESERVADA al dueño del negocio
+    # ────────────────────────────────────────────────────────
+    async def _send_appointment_email_notification(
+        self,
+        tenant: dict,
+        booking_data: dict,
+        phone: str,
+    ) -> None:
+        """
+        Envía un email de notificación al dueño del negocio cuando
+        el bot agenda una cita vía WhatsApp.
+        Solo se dispara si el tenant tiene 'notification_email' configurado.
+        """
+        notification_email = tenant.get("notification_email")
+        if not notification_email:
+            logger.info(
+                f"[{tenant.get('nombre')}] Sin notification_email configurado — "
+                "notificación de cita omitida."
+            )
+            return
+
+        from infrastructure.email_service import EmailService
+        from datetime import datetime
+
+        negocio     = tenant.get("nombre", "Tu Negocio")
+        cliente     = booking_data.get("cliente_nombre") or "Cliente"
+        servicio    = booking_data.get("servicio") or "No especificado"
+        precio      = booking_data.get("precio") or ""
+        fecha_raw   = booking_data.get("fecha", "")
+        hora_raw    = booking_data.get("hora", "")
+        wa_link     = f"https://wa.me/{phone.lstrip('+')}"
+
+        # Formatear fecha legible
+        try:
+            meses = ["enero","febrero","marzo","abril","mayo","junio",
+                     "julio","agosto","septiembre","octubre","noviembre","diciembre"]
+            dt = datetime.strptime(fecha_raw, "%Y-%m-%d")
+            fecha_fmt = f"{dt.day} de {meses[dt.month-1]} de {dt.year}"
+        except Exception:
+            fecha_fmt = fecha_raw
+
+        precio_html = (
+            f'<tr><td style="color:#94a3b8;padding:6px 0">Valor estimado</td>'
+            f'<td style="color:#fff;font-weight:700;text-align:right">$ {precio}</td></tr>'
+        ) if precio else ""
+
+        html_body = f"""
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nueva Cita — {negocio}</title></head>
+<body style="margin:0;padding:0;background:#04060c;font-family:'Helvetica Neue',Arial,sans-serif">
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#04060c;padding:32px 16px">
+    <tr><td align="center">
+
+      <table width="100%" style="max-width:560px" cellpadding="0" cellspacing="0">
+
+        <!-- Header -->
+        <tr><td style="background:linear-gradient(135deg,#1a1f35 0%,#0f1420 100%);border-radius:16px 16px 0 0;padding:32px;text-align:center;border-bottom:1px solid rgba(99,102,241,0.25)">
+          <div style="display:inline-block;background:linear-gradient(135deg,#6366f1,#06b6d4);border-radius:12px;width:48px;height:48px;line-height:48px;font-size:24px;margin-bottom:16px">&#128197;</div>
+          <h1 style="margin:0;color:#fff;font-size:22px;font-weight:800;letter-spacing:-0.03em">
+            ¡Nueva Cita Agendada!
+          </h1>
+          <p style="margin:8px 0 0;color:#94a3b8;font-size:13px">{negocio} &mdash; Reserva vía WhatsApp Bot</p>
+        </td></tr>
+
+        <!-- Body -->
+        <tr><td style="background:#0d1117;padding:32px;border:1px solid rgba(255,255,255,0.05);border-top:none">
+
+          <!-- Alert badge -->
+          <div style="background:linear-gradient(135deg,rgba(99,102,241,0.1),rgba(6,182,212,0.07));border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px 16px;margin-bottom:24px;color:#a5b4fc;font-size:13px;font-weight:600">
+            &#128276; Una nueva cita ha sido confirmada automáticamente por el Agente IA.
+          </div>
+
+          <!-- Appointment details table -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#080c14;border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:20px;margin-bottom:24px">
+            <tr><td colspan="2" style="color:#64748b;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.05)">DETALLES DE LA CITA</td></tr>
+            <tr><td style="color:#94a3b8;padding:10px 0 6px">&#128100; Cliente</td>
+                <td style="color:#fff;font-weight:800;text-align:right;padding:10px 0 6px">{cliente}</td></tr>
+            <tr><td style="color:#94a3b8;padding:6px 0">&#128241; WhatsApp</td>
+                <td style="text-align:right;padding:6px 0">
+                  <a href="{wa_link}" style="color:#25d366;font-weight:700;text-decoration:none">{phone}</a>
+                </td></tr>
+            <tr style="border-top:1px solid rgba(255,255,255,0.04)">
+                <td style="color:#94a3b8;padding:10px 0 6px">&#9986;&#65039; Servicio</td>
+                <td style="color:#a5b4fc;font-weight:700;text-align:right;padding:10px 0 6px">{servicio}</td></tr>
+            <tr><td style="color:#94a3b8;padding:6px 0">&#128197; Fecha</td>
+                <td style="color:#fff;font-weight:700;text-align:right;padding:6px 0">{fecha_fmt}</td></tr>
+            <tr><td style="color:#94a3b8;padding:6px 0">&#128336; Hora</td>
+                <td style="color:#38bdf8;font-weight:800;text-align:right;padding:6px 0">{hora_raw}</td></tr>
+            {precio_html}
+          </table>
+
+          <!-- CTA -->
+          <div style="text-align:center;margin-bottom:24px">
+            <a href="{wa_link}" style="display:inline-block;background:linear-gradient(135deg,#25d366,#128c7e);color:#fff;font-weight:800;font-size:14px;text-decoration:none;padding:14px 32px;border-radius:12px"
+            >&#128172; Responder por WhatsApp</a>
+          </div>
+
+          <p style="color:#475569;font-size:11px;text-align:center;margin:0">
+            Este correo fue enviado automáticamente por <strong style="color:#6366f1">BeautySync Pro+</strong>
+            cuando el cliente confirmó su cita a través del Agente IA de WhatsApp.
+          </p>
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="background:#080a10;border-radius:0 0 16px 16px;padding:20px;text-align:center;border:1px solid rgba(255,255,255,0.04);border-top:none">
+          <p style="margin:0;color:#334155;font-size:11px">&copy; 2024 BeautySync Pro+ &mdash; Todos los derechos reservados</p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+
+</body>
+</html>
+"""
+
+        subject = f"\U0001f4c5 Nueva Cita \u2014 {cliente} | {fecha_fmt} {hora_raw} | {negocio}"
+        email_svc = EmailService()
+        ok = await email_svc.send_html_email(
+            subject=subject,
+            html_content=html_body,
+            recipient=notification_email,
+        )
+        if ok:
+            logger.info(f"[{negocio}] ✅ Email de cita enviado a {notification_email}")
+        else:
+            logger.warning(f"[{negocio}] ⚠️ Email de cita fallido — revisar credenciales SMTP")
+
+    # ────────────────────────────────────────────────────────
+    # EMAIL: Notificación de LEAD CALIFICADO al equipo de ventas
+    # ────────────────────────────────────────────────────────
     async def _send_lead_email_notification(
         self,
         tenant: dict,
