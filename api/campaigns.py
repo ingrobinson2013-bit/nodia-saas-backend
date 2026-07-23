@@ -170,17 +170,8 @@ async def send_campaign(req: SendCampaignRequest):
                         }
                     ]
                 else:
-                    lang_code = req.template_language or "es_CO"
-                    # Generic component format for other templates
-                    components = [
-                        {
-                            "type": "body",
-                            "parameters": [{
-                                "type": "text",
-                                "text": contact_name
-                            }]
-                        }
-                    ]
+                    lang_code = req.template_language or "en_US"
+                    components = []
 
                 wa_response = await wa.send_template(
                     to=clean_phone,
