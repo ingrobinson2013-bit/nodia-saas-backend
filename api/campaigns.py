@@ -166,10 +166,18 @@ async def send_campaign(req: SendCampaignRequest):
                         }
                     ]
 
+                # Garantizar código de idioma es_CO para contacto_inicial_beautysyncpro
+                lang_code = "es_CO"
+                if req.template_language and req.template_language != "es":
+                    lang_code = req.template_language
+                if "contacto_inicial" in clean_tpl_name or clean_tpl_name == "contacto_inicial_beautysyncpro":
+                    clean_tpl_name = "contacto_inicial_beautysyncpro"
+                    lang_code = "es_CO"
+
                 wa_response = await wa.send_template(
                     to=clean_phone,
                     template_name=clean_tpl_name,
-                    lang=req.template_language or "es_CO",
+                    lang=lang_code,
                     components=components
                 )
             else:
@@ -267,7 +275,7 @@ async def list_campaigns(tenant_id: str):
     """
     db = get_supabase()
     try:
-        res = db.table("campaigns").select("*").eq("tenant_id", tenant_id).order("created_at", { "ascending": False }).execute()
+        res = db.table("campaigns").select("*").eq("tenant_id", tenant_id).order("created_at", desc=True).execute()
         return {"campaigns": res.data or []}
     except Exception as e:
         logger.warning(f"No se pudo consultar historial de campañas: {e}")
