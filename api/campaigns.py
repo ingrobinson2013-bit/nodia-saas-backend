@@ -272,3 +272,63 @@ async def list_campaigns(tenant_id: str):
     except Exception as e:
         logger.warning(f"No se pudo consultar historial de campañas: {e}")
         return {"campaigns": []}
+
+
+class CheckContactsRequest(BaseModel):
+    tenant_id: str
+    phones: List[str]
+
+
+@router.post("/campaigns/check-contacts")
+async def check_contacts(req: CheckContactsRequest):
+    """
+    Verifica qué contactos de la lista ya han recibido mensajes de remarketing en el pasado.
+    Retorna el estado 'already_sent' y la fecha de la última interacción para evitar duplicados.
+    """
+    if not req.phones:
+        return {"results": {}}
+
+    db = get_supabase()
+
+    # Normalizar teléfonos
+    clean_phones = []
+    for p in req.phones:
+        norm = normalize_colombia_phone(p)
+        if norm:
+            clean_phones.append(norm)
+
+    if not clean_phones:
+        return {"results": {}}
+
+    try:
+        # Consultar sesiones existentes en chat_sessions
+        res = db.table("chat_sessions") \
+            .select("wa_from, updated_at, history, name") \
+            .eq("tenant_id", req.tenant_id) \
+            .in_("wa_from", clean_phones) \
+            .execute()
+
+        results = {}
+        for session in (res.data or []):
+            wa = session.get("wa_from")
+            history = session.get("history") or []
+            
+            # Buscar si en el historial hay un mensaje de campaña
+            has_campaign = any(
+                "CAMPAÑA" in str(msg.get("content", "")).upper() or
+                "REMARKETING" in str(msg.get("content", "")).upper()
+                for msg in history if isinstance(msg, dict)
+            )
+
+            results[wa] = {
+                "already_sent": True,
+                "has_campaign_message": has_campaign,
+                "last_interaction": session.get("updated_at"),
+                "name": session.get("name") or "Cliente"
+            }
+
+        return {"results": results}
+
+    except Exception as e:
+        logger.error(f"Error verificando histórico de contactos: {e}")
+        return {"results": {}}
