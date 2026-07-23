@@ -128,9 +128,13 @@ async def send_campaign(req: SendCampaignRequest):
         try:
             # Enviar por WhatsApp
             if req.message_type == "template" and req.template_name:
+                # Sanitizar nombre de plantilla (eliminar " (APPROVED) - es_CO" si está presente)
+                clean_tpl_name = req.template_name.split("(")[0].split()[0].strip()
                 components = []
+
                 # Si es la plantilla oficial de BeautySync Pro (contacto_inicial_beautysyncpro)
-                if req.template_name == "contacto_inicial_beautysyncpro":
+                if "contacto_inicial" in clean_tpl_name or clean_tpl_name == "contacto_inicial_beautysyncpro":
+                    clean_tpl_name = "contacto_inicial_beautysyncpro"
                     components = [
                         {
                             "type": "header",
@@ -164,7 +168,7 @@ async def send_campaign(req: SendCampaignRequest):
 
                 wa_response = await wa.send_template(
                     to=clean_phone,
-                    template_name=req.template_name,
+                    template_name=clean_tpl_name,
                     lang=req.template_language or "es_CO",
                     components=components
                 )
