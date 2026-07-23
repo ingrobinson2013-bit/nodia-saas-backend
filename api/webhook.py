@@ -34,8 +34,16 @@ async def verify_webhook(request: Request):
 # ──────────────────────────────────────────────────────────
 # POST /webhook — Recibe mensajes entrantes de WhatsApp
 # ──────────────────────────────────────────────────────────
+LAST_WEBHOOK_ERROR = {}
+
+@router.get("/webhook/last-error")
+async def get_last_webhook_error():
+    """Retorna el último error de entrega reportado por el webhook de Meta."""
+    return LAST_WEBHOOK_ERROR or {"status": "no_errors_captured"}
+
 @router.post("/webhook")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
+    global LAST_WEBHOOK_ERROR
     # Verificar firma HMAC-SHA256 de Meta (seguridad)
     if not await _verify_meta_signature(request):
         logger.error("❌ Firma Meta inválida — request rechazado")
@@ -66,6 +74,13 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                     st_id = st.get("id")
                     st_errors = st.get("errors", [])
                     if st_status == "failed":
+                        LAST_WEBHOOK_ERROR = {
+                            "recipient": st.get("recipient_id"),
+                            "msg_id": st_id,
+                            "timestamp": st.get("timestamp"),
+                            "errors": st_errors,
+                            "full_status": st
+                        }
                         logger.error(f"🚨 META DELIVERY FAILED para {st.get('recipient_id')} | msg_id={st_id} | Errores={st_errors}")
                     else:
                         logger.info(f"📊 Status update de Meta: {st_id} -> {st_status}")
