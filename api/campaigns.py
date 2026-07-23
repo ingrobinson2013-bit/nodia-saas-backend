@@ -128,10 +128,45 @@ async def send_campaign(req: SendCampaignRequest):
         try:
             # Enviar por WhatsApp
             if req.message_type == "template" and req.template_name:
+                components = []
+                # Si es la plantilla oficial de BeautySync Pro (contacto_inicial_beautysyncpro)
+                if req.template_name == "contacto_inicial_beautysyncpro":
+                    components = [
+                        {
+                            "type": "header",
+                            "parameters": [{
+                                "type": "image",
+                                "image": {
+                                    "link": "https://blog.tesoconsulting.co/wp-content/uploads/2026/05/BeautySync_History_Meta.webp"
+                                }
+                            }]
+                        },
+                        {
+                            "type": "body",
+                            "parameters": [{
+                                "type": "text",
+                                "parameter_name": "nombre",
+                                "text": contact_name
+                            }]
+                        }
+                    ]
+                else:
+                    # Generic component format for other templates
+                    components = [
+                        {
+                            "type": "body",
+                            "parameters": [{
+                                "type": "text",
+                                "text": contact_name
+                            }]
+                        }
+                    ]
+
                 wa_response = await wa.send_template(
                     to=clean_phone,
                     template_name=req.template_name,
-                    lang=req.template_language
+                    lang=req.template_language or "es_CO",
+                    components=components
                 )
             else:
                 wa_response = await wa.send_text(to=clean_phone, message=personalized_text)
