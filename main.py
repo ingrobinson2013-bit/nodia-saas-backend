@@ -52,6 +52,7 @@ app.add_middleware(
 
 from api.odoo_webhook import router as odoo_webhook_router
 from api.templates import router as templates_router
+from api.campaigns import router as campaigns_router
 
 # ── Routers ───────────────────────────────────────────────
 app.include_router(webhook_router, tags=["WhatsApp Webhook"])
@@ -59,6 +60,7 @@ app.include_router(send_message_router, prefix="/api", tags=["Panel Agente"])
 app.include_router(meta_connect_router, prefix="/api", tags=["Meta Onboarding"])
 app.include_router(odoo_webhook_router, prefix="/api", tags=["Odoo Webhooks"])
 app.include_router(templates_router, prefix="/api", tags=["WhatsApp Templates"])
+app.include_router(campaigns_router, prefix="/api", tags=["WhatsApp Campaigns"])
 
 
 # ── Health check ──────────────────────────────────────────
