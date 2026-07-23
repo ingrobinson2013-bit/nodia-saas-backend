@@ -61,7 +61,14 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
             statuses = value.get("statuses", [])
             if statuses:
-                logger.info(f"📊 Status update de Meta: {statuses}")
+                for st in statuses:
+                    st_status = st.get("status")
+                    st_id = st.get("id")
+                    st_errors = st.get("errors", [])
+                    if st_status == "failed":
+                        logger.error(f"🚨 META DELIVERY FAILED para {st.get('recipient_id')} | msg_id={st_id} | Errores={st_errors}")
+                    else:
+                        logger.info(f"📊 Status update de Meta: {st_id} -> {st_status}")
 
             if not messages:
                 logger.info("⚠️ No hay mensajes en este change (status update), ignorado")
