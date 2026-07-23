@@ -59,6 +59,10 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
             logger.info(f"📱 phone_number_id={phone_number_id} | mensajes entrantes={len(messages)}")
 
+            statuses = value.get("statuses", [])
+            if statuses:
+                logger.info(f"📊 Status update de Meta: {statuses}")
+
             if not messages:
                 logger.info("⚠️ No hay mensajes en este change (status update), ignorado")
                 continue
