@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="NODIA WhatsApp AI SaaS",
     description="Backend multi-tenant para agentes IA en WhatsApp",
-    version="1.0.0",
+    version="1.0.1",
     docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
     lifespan=lifespan,
 )
