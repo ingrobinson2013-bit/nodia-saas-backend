@@ -180,40 +180,42 @@ async def send_campaign(req: SendCampaignRequest):
             })
 
             # 3. Crear o actualizar sesión en chat_sessions para que aparezca en el Inbox
-            now_iso = datetime.now(timezone.utc).isoformat()
-            
-            # Buscar sesión existente
-            session_query = db.table("chat_sessions") \
-                .select("id, history") \
-                .eq("tenant_id", req.tenant_id) \
-                .eq("sender_wa_id", clean_phone) \
-                .execute()
+            try:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                
+                # Buscar sesión existente (usando columna wa_from)
+                session_query = db.table("chat_sessions") \
+                    .select("id, history") \
+                    .eq("tenant_id", req.tenant_id) \
+                    .eq("wa_from", clean_phone) \
+                    .execute()
 
-            initial_history = [{
-                "role": "agent",
-                "content": f"📢 [CAMPAÑA REMARKETING: {req.campaign_name}]\n{personalized_text}",
-                "timestamp": now_iso
-            }]
+                initial_history = [{
+                    "role": "agent",
+                    "content": f"📢 [CAMPAÑA REMARKETING: {req.campaign_name}]\n{personalized_text}",
+                    "timestamp": now_iso
+                }]
 
-            if session_query.data:
-                existing_session = session_query.data[0]
-                h = existing_session.get("history") or []
-                h.extend(initial_history)
-                db.table("chat_sessions").update({
-                    "history": h,
-                    "estado": "agente_ia",
-                    "updated_at": now_iso
-                }).eq("id", existing_session["id"]).execute()
-            else:
-                db.table("chat_sessions").insert({
-                    "tenant_id": req.tenant_id,
-                    "sender_wa_id": clean_phone,
-                    "cliente_nombre": contact_name,
-                    "estado": "agente_ia",
-                    "history": initial_history,
-                    "created_at": now_iso,
-                    "updated_at": now_iso
-                }).execute()
+                if session_query.data:
+                    existing_session = session_query.data[0]
+                    h = existing_session.get("history") or []
+                    h.extend(initial_history)
+                    db.table("chat_sessions").update({
+                        "history": h,
+                        "estado": "agente_ia",
+                        "updated_at": now_iso
+                    }).eq("id", existing_session["id"]).execute()
+                else:
+                    db.table("chat_sessions").insert({
+                        "tenant_id": req.tenant_id,
+                        "wa_from": clean_phone,
+                        "name": contact_name,
+                        "estado": "agente_ia",
+                        "history": initial_history,
+                        "updated_at": now_iso
+                    }).execute()
+            except Exception as sess_err:
+                logger.warning(f"No se pudo guardar la sesión en chat_sessions (omitido): {sess_err}")
 
         except Exception as e:
             failed_count += 1
