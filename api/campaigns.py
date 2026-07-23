@@ -135,6 +135,7 @@ async def send_campaign(req: SendCampaignRequest):
                 # Si es la plantilla oficial de BeautySync Pro (contacto_inicial_beautysyncpro)
                 if "contacto_inicial" in clean_tpl_name or clean_tpl_name == "contacto_inicial_beautysyncpro":
                     clean_tpl_name = "contacto_inicial_beautysyncpro"
+                    lang_code = "es_CO"
                     components = [
                         {
                             "type": "header",
@@ -154,7 +155,22 @@ async def send_campaign(req: SendCampaignRequest):
                             }]
                         }
                     ]
+                elif "retoma_pos" in clean_tpl_name or clean_tpl_name == "retoma_pos_electronico":
+                    clean_tpl_name = "retoma_pos_electronico"
+                    lang_code = "es"
+                    components = [
+                        {
+                            "type": "header",
+                            "parameters": [{
+                                "type": "image",
+                                "image": {
+                                    "link": "https://gtrxvfqgytkpvdgmzcgu.supabase.co/storage/v1/object/public/public-assets/beautysync_header.jpg"
+                                }
+                            }]
+                        }
+                    ]
                 else:
+                    lang_code = req.template_language or "es_CO"
                     # Generic component format for other templates
                     components = [
                         {
@@ -165,14 +181,6 @@ async def send_campaign(req: SendCampaignRequest):
                             }]
                         }
                     ]
-
-                # Garantizar código de idioma es_CO para contacto_inicial_beautysyncpro
-                lang_code = "es_CO"
-                if req.template_language and req.template_language != "es":
-                    lang_code = req.template_language
-                if "contacto_inicial" in clean_tpl_name or clean_tpl_name == "contacto_inicial_beautysyncpro":
-                    clean_tpl_name = "contacto_inicial_beautysyncpro"
-                    lang_code = "es_CO"
 
                 wa_response = await wa.send_template(
                     to=clean_phone,
