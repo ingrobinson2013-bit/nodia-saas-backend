@@ -141,7 +141,7 @@ async def send_campaign(req: SendCampaignRequest):
                             "parameters": [{
                                 "type": "image",
                                 "image": {
-                                    "link": "https://blog.tesoconsulting.co/wp-content/uploads/2026/05/BeautySync_History_Meta.webp"
+                                    "link": "https://gtrxvfqgytkpvdgmzcgu.supabase.co/storage/v1/object/public/public-assets/beautysync_header.jpg"
                                 }
                             }]
                         },
