@@ -71,7 +71,11 @@ class OdooService:
         if not self.url:
             logger.error("❌ OdooService: odoo_url vacía o inválida — skip auth")
             return
-        self._authenticate()
+        if self.db and self.user and self.api_key:
+            try:
+                self._authenticate()
+            except Exception as e:
+                logger.warning(f"Odoo: no se pudo autenticar usuario — solo endpoints públicos estarán disponibles: {e}")
 
     def _jsonrpc(self, service: str, method: str, args: list) -> dict:
         """Ejecuta una llamada JSON-RPC al endpoint /jsonrpc de Odoo."""
@@ -205,12 +209,28 @@ class OdooService:
             logger.error("Odoo: uid no disponible — fallo de autenticación")
             return None
         try:
+            # 0. Validar fecha y hora futura en Bogotá (America/Bogota UTC-5)
+            try:
+                from zoneinfo import ZoneInfo
+                bogota_tz = ZoneInfo("America/Bogota")
+            except ImportError:
+                from datetime import timezone, timedelta
+                bogota_tz = timezone(timedelta(hours=-5))
+
+            ahora_bogota = datetime.now(bogota_tz)
+            y, mo, d = map(int, date_str.split("-"))
+            h, m = map(int, time_str.split(":"))
+            fecha_hora_cita_bogota = datetime(y, mo, d, h, m, tzinfo=bogota_tz)
+
+            if fecha_hora_cita_bogota <= ahora_bogota:
+                logger.warning(f"Odoo: Intento de agendar en fecha/hora pasada ({date_str} {time_str}). Rechazado.")
+                return "PAST_DATE_TIME"
+
             # 1. Calcular duración real del servicio
             dur_min = _duration_from_service(service_name, negocio_servicios)
             dur_hours = dur_min / 60.0
 
             # 2. Calcular hora de fin en Bogotá
-            h, m = map(int, time_str.split(":"))
             total_min = h * 60 + m + dur_min
             stop_h = str(total_min // 60).zfill(2)
             stop_m = str(total_min % 60).zfill(2)
@@ -244,13 +264,13 @@ class OdooService:
                         professional_id = p.get("id")
                         break
 
+            # 7. Crear evento sin el campo booking_state (deprecado en el modelo calendar.event)
             event_data = {
                 "name": event_name,
                 "start": start_utc,
                 "stop": stop_utc,
                 "duration": dur_hours,
                 "description": desc_full,
-                "booking_state": "confirmed",
             }
             if partner_id:
                 event_data["partner_ids"] = [(4, partner_id)]
@@ -260,17 +280,8 @@ class OdooService:
             try:
                 event_id = self._execute("calendar.event", "create", [event_data])
             except Exception as e:
-                if "booking_state" in str(e) and "booking_state" in event_data:
-                    logger.warning("Odoo: 'booking_state' no es un campo válido en calendar.event. Reintentando creación sin él...")
-                    del event_data["booking_state"]
-                    try:
-                        event_id = self._execute("calendar.event", "create", [event_data])
-                    except Exception as retry_err:
-                        logger.error(f"❌ Error al reintentar creación en Odoo sin booking_state: {retry_err}")
-                        return None
-                else:
-                    logger.error(f"❌ Error creando cita en Odoo: {e}")
-                    return None
+                logger.error(f"❌ Error creando cita en Odoo: {e}")
+                return None
 
             logger.info(
                 f"✅ Odoo: cita creada event_id={event_id} — '{event_name}' "
@@ -280,6 +291,110 @@ class OdooService:
         except Exception as e:
             logger.error(f"❌ Error general en create_appointment: {e}")
             return None
+
+    # ──────────────────────────────────────────────────────────────────
+    # INTEGRACIÓN ENDPOINTS /api/spa/ (Cancelación, Mis Citas, Slots)
+    # ──────────────────────────────────────────────────────────────────
+
+    def get_client_appointments(self, phone: str) -> dict:
+        """
+        Consulta las citas del cliente en Odoo llamando al endpoint POST /api/spa/mis-citas.
+        """
+        if not self.url:
+            return {"success": False, "citas": [], "total": 0}
+        
+        clean_phone = phone.replace("+", "").strip() if phone else ""
+        url = f"{self.url}/api/spa/mis-citas"
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "call",
+            "id": 1,
+            "params": {
+                "phone": clean_phone
+            }
+        }
+        try:
+            response = httpx.post(
+                url,
+                json=payload,
+                timeout=12.0,
+                headers={"Content-Type": "application/json"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            result = data.get("result", {})
+            if isinstance(result, dict):
+                return result
+            return {"success": True, "citas": [], "total": 0}
+        except Exception as e:
+            logger.error(f"Error consultando mis-citas en Odoo ({url}): {e}")
+            return {"success": False, "citas": [], "total": 0, "error": str(e)}
+
+    def cancel_appointment_spa(self, cita_id: int, phone: str) -> dict:
+        """
+        Cancela una cita del cliente en Odoo llamando al endpoint POST /api/spa/cancelar.
+        """
+        if not self.url or not cita_id:
+            return {"success": False, "message": "ID de cita inválido"}
+        
+        clean_phone = phone.replace("+", "").strip() if phone else ""
+        url = f"{self.url}/api/spa/cancelar"
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "call",
+            "id": 1,
+            "params": {
+                "cita_id": int(cita_id),
+                "phone": clean_phone
+            }
+        }
+        try:
+            response = httpx.post(
+                url,
+                json=payload,
+                timeout=12.0,
+                headers={"Content-Type": "application/json"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            result = data.get("result", {})
+            if isinstance(result, dict):
+                return result
+            return {"success": True, "message": "Cita cancelada correctamente"}
+        except Exception as e:
+            logger.error(f"Error cancelando cita en Odoo ({url}): {e}")
+            return {"success": False, "message": f"Error al cancelar: {e}"}
+
+    def get_available_slots(self, date_str: str, professional_id: int = None, service_id: int = None) -> list:
+        """
+        Consulta slots disponibles llamando al endpoint GET /api/spa/slots.
+        """
+        if not self.url:
+            return []
+        url = f"{self.url}/api/spa/slots"
+        params = {"date": date_str}
+        if professional_id:
+            params["professional_id"] = professional_id
+        if service_id:
+            params["service_id"] = service_id
+        
+        try:
+            response = httpx.get(
+                url,
+                params=params,
+                timeout=10.0,
+                headers={"Content-Type": "application/json"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                return data.get("result", data.get("slots", []))
+            return []
+        except Exception as e:
+            logger.warning(f"No se pudo consultar /api/spa/slots ({url}): {e}")
+            return []
 
     def cancel_appointment(self, event_id: int) -> bool:
         """Archiva (cancela) una cita en Odoo estableciendo active=False."""

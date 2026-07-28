@@ -87,6 +87,45 @@ TOOL_CREATE_APPOINTMENT = {
 }
 
 
+TOOL_GET_MY_APPOINTMENTS = {
+    "type": "function",
+    "function": {
+        "name": "get_my_appointments",
+        "description": (
+            "Consulta las citas activas o pendientes del cliente en Odoo utilizando su número telefónico. "
+            "DEBES llamar esta función cuando el cliente pida cancelar, eliminar, anular, reprogramar o ver sus citas "
+            "(ej: 'quiero cancelar', 'cancelar cita', 'mis citas', 'eliminar cita', 'no puedo ir', 'reprogramar')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }
+}
+
+TOOL_CANCEL_APPOINTMENT = {
+    "type": "function",
+    "function": {
+        "name": "cancel_appointment",
+        "description": (
+            "Cancela una cita específica del cliente en Odoo mediante el ID numérico de la cita (cita_id). "
+            "Llama esta función cuando el cliente pida cancelar una cita específica o seleccione la cita a cancelar."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cita_id": {
+                    "type": "integer",
+                    "description": "ID numérico de la cita en Odoo (ej: 1805)"
+                }
+            },
+            "required": ["cita_id"]
+        }
+    }
+}
+
+
 class AIService:
     def __init__(self, api_key: str = None, model: str = None):
         self.client = AsyncOpenAI(api_key=api_key or settings.OPENAI_API_KEY)
@@ -123,7 +162,12 @@ class AIService:
 
         try:
             if odoo_config and odoo_config.get("url"):
-                tools = [TOOL_CHECK_AVAILABILITY, TOOL_CREATE_APPOINTMENT]
+                tools = [
+                    TOOL_CHECK_AVAILABILITY,
+                    TOOL_CREATE_APPOINTMENT,
+                    TOOL_GET_MY_APPOINTMENTS,
+                    TOOL_CANCEL_APPOINTMENT,
+                ]
 
                 response = await self.client.chat.completions.create(
                     model=self.model,
@@ -151,12 +195,25 @@ class AIService:
 
                     for tool_call in response_message.tool_calls:
                         fn_name = tool_call.function.name
-                        fn_args = json.loads(tool_call.function.arguments)
+                        fn_args = json.loads(tool_call.function.arguments or "{}")
 
                         if fn_name == "check_availability":
                             result = odoo.check_availability(fn_args.get("date_str", ""))
-                            tool_result = json.dumps(result, ensure_ascii=False)
+                            # También consultar slots libres del endpoint spa si están disponibles
+                            slots = odoo.get_available_slots(fn_args.get("date_str", ""))
+                            tool_result = json.dumps({"eventos_ocupados": result, "slots_disponibles": slots}, ensure_ascii=False)
                             logger.info(f"Odoo check_availability: {fn_args.get('date_str')} → {len(result)} eventos")
+
+                        elif fn_name == "get_my_appointments":
+                            res = odoo.get_client_appointments(phone=sender_wa_id or "")
+                            tool_result = json.dumps(res, ensure_ascii=False)
+                            logger.info(f"Odoo get_my_appointments para {sender_wa_id} → {res.get('total', 0)} citas")
+
+                        elif fn_name == "cancel_appointment":
+                            cita_id = fn_args.get("cita_id")
+                            res = odoo.cancel_appointment_spa(cita_id=cita_id, phone=sender_wa_id or "")
+                            tool_result = json.dumps(res, ensure_ascii=False)
+                            logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
 
                         elif fn_name == "create_appointment":
                             # ✅ Crear la cita en Odoo directamente desde ai_service
@@ -171,7 +228,13 @@ class AIService:
                                 description="Agendado via WhatsApp Bot NODIA",
                                 professional_name=fn_args.get("profesional_nombre", ""),
                             )
-                            if event_id:
+                            if event_id == "PAST_DATE_TIME":
+                                tool_result = json.dumps({
+                                    "success": False,
+                                    "error_code": "PAST_DATE_TIME",
+                                    "message": "Lo siento, no es posible agendar en una fecha u hora que ya pasó. Por favor elige una fecha y hora futura."
+                                }, ensure_ascii=False)
+                            elif event_id:
                                 logger.info(
                                     f"✅ Odoo: cita creada tool_call event_id={event_id} "
                                     f"— {fn_args.get('servicio')} {fn_args.get('fecha')} {fn_args.get('hora')}"
