@@ -250,7 +250,7 @@ class OdooService:
             # 5b. Agregar profesional a la descripción si aplica
             profesional_desc = f" | Profesional: {professional_name}" if professional_name else ""
             desc_full = (
-                f"Reserva WhatsApp | Tel: {phone} | Origen: AgenteIA VALE{precio_desc}{profesional_desc}"
+                f"Reserva WhatsApp | Tel: {phone} | Origen: AgenteIA VALE{precio_desc}{profesional_desc}\nBeautysync - Agendamiento"
             )
             if description:
                 desc_full += f"\n{description}"
@@ -309,44 +309,13 @@ class OdooService:
 
     def get_client_appointments(self, phone: str = "") -> dict:
         """
-        Consulta las citas del cliente en Odoo llamando al endpoint POST /api/spa/mis-citas.
-        Si Odoo retorna error (ej: NumericValueOutOfRange), usa el fallback con ORM search_read.
+        Consulta las citas del cliente en Odoo directamente mediante ORM search_read de calendar.event.
         """
-        if not self.url:
-            return {"success": False, "citas": [], "total": 0}
+        if not self.url or not phone:
+            return {"success": True, "citas": [], "total": 0}
         
         clean_phone = (phone or "").replace("+", "").strip()
-        url = f"{self.url}/api/spa/mis-citas"
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "call",
-            "id": 1,
-            "params": {
-                "phone": clean_phone
-            }
-        }
-        try:
-            response = httpx.post(
-                url,
-                json=payload,
-                timeout=12.0,
-                headers={"Content-Type": "application/json"}
-            )
-            response.raise_for_status()
-            data = response.json()
-            if "error" in data:
-                logger.warning(f"Odoo /api/spa/mis-citas devolvió error: {data['error']}. Ejecutando fallback ORM...")
-                return self._fallback_get_client_appointments(clean_phone)
-            result = data.get("result", {})
-            if isinstance(result, dict) and result.get("success"):
-                return result
-            if isinstance(result, dict) and not result.get("success"):
-                logger.warning("Odoo /api/spa/mis-citas success=False. Ejecutando fallback ORM...")
-                return self._fallback_get_client_appointments(clean_phone)
-            return {"success": True, "citas": [], "total": 0}
-        except Exception as e:
-            logger.error(f"Error consultando mis-citas en Odoo ({url}): {e}. Ejecutando fallback ORM...")
-            return self._fallback_get_client_appointments(clean_phone)
+        return self._fallback_get_client_appointments(clean_phone)
 
     def find_service_id(self, service_name: str) -> int | None:
         """Busca el ID relacional de un servicio en product.template mediante coincidencia difusa."""
@@ -380,54 +349,84 @@ class OdooService:
             logger.warning(f"Odoo find_service_id error: {e}")
             return None
 
-    def find_partner_id(self, phone: str) -> int | None:
-        """Busca solo un contacto existente por teléfono (sin crear uno nuevo)."""
+    def find_partner_ids(self, phone: str) -> list[int]:
+        """Busca todos los IDs de contactos existentes por teléfono o celular."""
         if not self.uid or not phone:
-            return None
+            return []
         try:
-            clean = phone[-10:] if len(phone) >= 10 else phone
+            clean_10 = phone[-10:] if len(phone) >= 10 else phone
             ids = self._execute(
                 "res.partner", "search",
-                [[["phone", "ilike", clean]]]
+                [[["active", "=", True], "|", "|", ["phone", "ilike", clean_10], ["mobile", "ilike", clean_10], ["phone", "ilike", phone]]]
             )
-            if ids:
-                return ids[0]
-            ids_alt = self._execute(
-                "res.partner", "search",
-                [[["phone", "ilike", phone]]]
-            )
-            return ids_alt[0] if ids_alt else None
+            return ids or []
         except Exception as e:
-            logger.warning(f"Odoo find_partner_id error: {e}")
-            return None
+            logger.warning(f"Odoo find_partner_ids error: {e}")
+            return []
+
+    def find_partner_id(self, phone: str) -> int | None:
+        """Busca el primer ID de contacto existente por teléfono."""
+        pids = self.find_partner_ids(phone)
+        return pids[0] if pids else None
 
     def _fallback_get_client_appointments(self, phone: str) -> dict:
-        """Fallback: busca citas del cliente en calendar.event mediante partner_id."""
+        """Fallback: busca citas del cliente en calendar.event mediante partner_id, teléfono y descripción."""
         if not phone:
             return {"success": True, "citas": [], "total": 0}
         try:
-            partner_id = self.find_partner_id(phone)
-            if not partner_id:
-                return {"success": True, "citas": [], "total": 0}
-            
-            events = self._execute(
-                "calendar.event", "search_read",
-                [[["partner_ids", "in", [partner_id]], ["active", "=", True]]],
-                {"fields": ["id", "name", "start", "stop", "description"], "order": "start desc"}
-            )
-            
+            clean_10 = phone[-10:] if len(phone) >= 10 else phone
+            events_dict = {}
+
+            # 1. Búsqueda por partner_ids
+            partner_ids = self.find_partner_ids(phone)
+            for pid in partner_ids:
+                if isinstance(pid, int):
+                    try:
+                        evs1 = self._execute(
+                            "calendar.event", "search_read",
+                            [[["partner_ids", "in", [pid]], ["active", "=", True]]],
+                            {"fields": ["id", "name", "start", "stop", "description"], "order": "start desc"}
+                        )
+                        for ev in evs1 or []:
+                            events_dict[ev["id"]] = ev
+                    except Exception as e1:
+                        logger.warning(f"Fallback query partner {pid} error: {e1}")
+
+            # 2. Búsqueda por spa_customer_phone
+            try:
+                evs2 = self._execute(
+                    "calendar.event", "search_read",
+                    [[["spa_customer_phone", "ilike", clean_10], ["active", "=", True]]],
+                    {"fields": ["id", "name", "start", "stop", "description"], "order": "start desc"}
+                )
+                for ev in evs2 or []:
+                    events_dict[ev["id"]] = ev
+            except Exception as e2:
+                logger.warning(f"Fallback query 2 error: {e2}")
+
+            # 3. Búsqueda por descripción (ej: "Tel: 573018511200")
+            try:
+                evs3 = self._execute(
+                    "calendar.event", "search_read",
+                    [[["description", "ilike", clean_10], ["active", "=", True]]],
+                    {"fields": ["id", "name", "start", "stop", "description"], "order": "start desc"}
+                )
+                for ev in evs3 or []:
+                    events_dict[ev["id"]] = ev
+            except Exception as e3:
+                logger.warning(f"Fallback query 3 error: {e3}")
+
             from datetime import datetime, timedelta, timezone
             bogota_tz = timezone(timedelta(hours=-5))
             ahora_bogota = datetime.now(bogota_tz)
             
             citas = []
-            for ev in events or []:
+            for ev in events_dict.values():
                 start_str = ev.get("start", "")
                 if start_str:
                     try:
                         dt_utc = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                         dt_bogota = dt_utc.astimezone(bogota_tz)
-                        # Solo incluir citas futuras o de las últimas 2 horas
                         if dt_bogota < ahora_bogota - timedelta(hours=2):
                             continue
                         fecha_formatted = dt_bogota.strftime("%d/%m/%Y")
@@ -604,22 +603,6 @@ class OdooService:
             return events or []
         except Exception as e:
             logger.error(f"Error consultando disponibilidad Odoo: {e}")
-            return []
-
-    def get_client_appointments(self, partner_id: int) -> list:
-        """Devuelve las citas futuras de un cliente específico."""
-        if not self.uid or not partner_id:
-            return []
-        try:
-            today_utc = _bogota_to_utc(date.today().strftime("%Y-%m-%d"), "00:00")
-            events = self._execute(
-                "calendar.event", "search_read",
-                [[["partner_ids", "in", [partner_id]], ["start", ">=", today_utc], ["active", "=", True]]],
-                {"fields": ["name", "start", "stop", "duration"]},
-            )
-            return events or []
-        except Exception as e:
-            logger.error(f"Error consultando citas cliente {partner_id}: {e}")
             return []
 
     def get_professionals(self) -> list:
