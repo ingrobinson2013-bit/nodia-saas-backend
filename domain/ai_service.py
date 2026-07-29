@@ -141,6 +141,7 @@ class AIService:
         sender_wa_id: str = None,
         sender_name: str = None,
         negocio_servicios: str = "",
+        tenant_id: str = None,
     ) -> tuple[str, dict | None]:
         """
         Genera una respuesta de IA dado el mensaje del usuario y el historial.

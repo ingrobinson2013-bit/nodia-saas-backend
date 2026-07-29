@@ -179,6 +179,7 @@ class MessageHandler:
             sender_wa_id=sender_wa_id,
             sender_name=sender_name,
             negocio_servicios=negocio_servicios,
+            tenant_id=tenant_id,
         )
 
         logger.debug(f"[{tenant['nombre']}] GPT response: {response_text[:300]}")
