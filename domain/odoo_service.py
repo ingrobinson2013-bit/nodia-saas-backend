@@ -255,20 +255,8 @@ class OdooService:
             if description:
                 desc_full += f"\n{description}"
 
-            # 6. Buscar ID del servicio en product.template
-            service_id = None
-            if service_name:
-                try:
-                    svc_clean = service_name.split(" Desde")[0].strip() if " Desde" in service_name else service_name
-                    s_list = self._execute(
-                        "product.template", "search_read",
-                        [[["name", "ilike", svc_clean[:15]]]],
-                        {"fields": ["id", "name"], "limit": 1}
-                    )
-                    if s_list:
-                        service_id = s_list[0]["id"]
-                except Exception as e_s:
-                    logger.warning(f"Odoo: No se pudo buscar service_id en product.template: {e_s}")
+            # 6. Buscar ID del servicio en product.template mediante coincidencia difusa
+            service_id = self.find_service_id(service_name)
 
             # 6b. Buscar ID del profesional en hr.employee
             professional_id = None
@@ -359,6 +347,38 @@ class OdooService:
         except Exception as e:
             logger.error(f"Error consultando mis-citas en Odoo ({url}): {e}. Ejecutando fallback ORM...")
             return self._fallback_get_client_appointments(clean_phone)
+
+    def find_service_id(self, service_name: str) -> int | None:
+        """Busca el ID relacional de un servicio en product.template mediante coincidencia difusa."""
+        if not self.uid or not service_name:
+            return None
+        try:
+            import re
+            clean = re.sub(r'[^a-zA-Z0-9\s]', '', service_name.lower()).strip()
+            words = [w for w in clean.split() if len(w) >= 3]
+            
+            prods = self._execute(
+                "product.template", "search_read",
+                [],
+                {"fields": ["id", "name"]}
+            )
+            
+            # 1. Coincidencia exacta o contenida
+            for p in prods or []:
+                p_norm = re.sub(r'[^a-zA-Z0-9\s]', '', p.get("name", "").lower()).strip()
+                if clean in p_norm or p_norm in clean:
+                    return p["id"]
+            
+            # 2. Coincidencia por palabras clave principales
+            for p in prods or []:
+                p_norm = re.sub(r'[^a-zA-Z0-9\s]', '', p.get("name", "").lower()).strip()
+                if words and any(w in p_norm for w in words):
+                    return p["id"]
+                    
+            return None
+        except Exception as e:
+            logger.warning(f"Odoo find_service_id error: {e}")
+            return None
 
     def find_partner_id(self, phone: str) -> int | None:
         """Busca solo un contacto existente por teléfono (sin crear uno nuevo)."""
