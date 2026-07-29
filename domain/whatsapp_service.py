@@ -49,12 +49,17 @@ class WhatsAppService:
 
     async def mark_as_read(self, message_id: str) -> None:
         """Marca un mensaje como leído (doble palomita azul)."""
+        if not message_id or message_id.startswith("test_"):
+            return
         payload = {
             "messaging_product": "whatsapp",
             "status": "read",
             "message_id": message_id,
         }
-        await self._post(payload)
+        try:
+            await self._post(payload)
+        except Exception as e:
+            logger.warning(f"No se pudo marcar mensaje {message_id} como leído: {e}")
 
     async def _post(self, payload: dict) -> dict:
         headers = {
