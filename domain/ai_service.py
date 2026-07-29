@@ -205,13 +205,19 @@ class AIService:
                             logger.info(f"Odoo check_availability: {fn_args.get('date_str')} → {len(result)} eventos")
 
                         elif fn_name == "get_my_appointments":
-                            res = odoo.get_client_appointments(phone=sender_wa_id or "")
+                            client_phone = sender_wa_id or fn_args.get("phone") or ""
+                            res = odoo.get_client_appointments(client_phone)
+                            if not isinstance(res, dict):
+                                res = {"success": True, "citas": res if isinstance(res, list) else [], "total": len(res) if isinstance(res, list) else 0}
                             tool_result = json.dumps(res, ensure_ascii=False)
-                            logger.info(f"Odoo get_my_appointments para {sender_wa_id} → {res.get('total', 0)} citas")
+                            total_cnt = res.get("total", len(res.get("citas", [])))
+                            logger.info(f"Odoo get_my_appointments para {client_phone} → {total_cnt} citas")
 
                         elif fn_name == "cancel_appointment":
                             cita_id = fn_args.get("cita_id")
-                            res = odoo.cancel_appointment_spa(cita_id=cita_id, phone=sender_wa_id or "")
+                            res = odoo.cancel_appointment_spa(cita_id, sender_wa_id or "")
+                            if not isinstance(res, dict):
+                                res = {"success": True, "message": str(res)}
                             tool_result = json.dumps(res, ensure_ascii=False)
                             logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
 

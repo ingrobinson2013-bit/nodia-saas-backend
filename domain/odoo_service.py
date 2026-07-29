@@ -296,14 +296,14 @@ class OdooService:
     # INTEGRACIÓN ENDPOINTS /api/spa/ (Cancelación, Mis Citas, Slots)
     # ──────────────────────────────────────────────────────────────────
 
-    def get_client_appointments(self, phone: str) -> dict:
+    def get_client_appointments(self, phone: str = "") -> dict:
         """
         Consulta las citas del cliente en Odoo llamando al endpoint POST /api/spa/mis-citas.
         """
         if not self.url:
             return {"success": False, "citas": [], "total": 0}
         
-        clean_phone = phone.replace("+", "").strip() if phone else ""
+        clean_phone = (phone or "").replace("+", "").strip()
         url = f"{self.url}/api/spa/mis-citas"
         payload = {
             "jsonrpc": "2.0",
@@ -330,14 +330,14 @@ class OdooService:
             logger.error(f"Error consultando mis-citas en Odoo ({url}): {e}")
             return {"success": False, "citas": [], "total": 0, "error": str(e)}
 
-    def cancel_appointment_spa(self, cita_id: int, phone: str) -> dict:
+    def cancel_appointment_spa(self, cita_id: int = 0, phone: str = "") -> dict:
         """
         Cancela una cita del cliente en Odoo llamando al endpoint POST /api/spa/cancelar.
         """
         if not self.url or not cita_id:
             return {"success": False, "message": "ID de cita inválido"}
         
-        clean_phone = phone.replace("+", "").strip() if phone else ""
+        clean_phone = (phone or "").replace("+", "").strip()
         url = f"{self.url}/api/spa/cancelar"
         payload = {
             "jsonrpc": "2.0",
