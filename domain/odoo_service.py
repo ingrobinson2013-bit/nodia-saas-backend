@@ -255,27 +255,50 @@ class OdooService:
             if description:
                 desc_full += f"\n{description}"
 
-            # 6. Buscar ID del profesional
+            # 6. Buscar ID del servicio en product.template
+            service_id = None
+            if service_name:
+                try:
+                    svc_clean = service_name.split(" Desde")[0].strip() if " Desde" in service_name else service_name
+                    s_list = self._execute(
+                        "product.template", "search_read",
+                        [[["name", "ilike", svc_clean[:15]]]],
+                        {"fields": ["id", "name"], "limit": 1}
+                    )
+                    if s_list:
+                        service_id = s_list[0]["id"]
+                except Exception as e_s:
+                    logger.warning(f"Odoo: No se pudo buscar service_id en product.template: {e_s}")
+
+            # 6b. Buscar ID del profesional en hr.employee
             professional_id = None
             if professional_name and professional_name.lower() != "cualquiera":
                 pro_list = self.get_professionals()
                 for p in pro_list:
-                    if p.get("name", "").lower() == professional_name.lower():
+                    p_name = p.get("name", "").lower()
+                    req_name = professional_name.lower()
+                    if p_name == req_name or req_name in p_name or p_name in req_name:
                         professional_id = p.get("id")
                         break
 
-            # 7. Crear evento sin el campo booking_state (deprecado en el modelo calendar.event)
+            # 7. Crear evento en calendar.event con IDs relacionales y campos spa
             event_data = {
                 "name": event_name,
                 "start": start_utc,
                 "stop": stop_utc,
                 "duration": dur_hours,
                 "description": desc_full,
+                "spa_customer_phone": phone or "",
+                "spa_status": "confirmed",
+                "spa_source": "wa",
             }
             if partner_id:
                 event_data["partner_ids"] = [(4, partner_id)]
             if professional_id and self.professional_field_name:
                 event_data[self.professional_field_name] = professional_id
+            if service_id:
+                svc_field = getattr(self, "service_field_name", None) or "spa_service_id"
+                event_data[svc_field] = service_id
 
             try:
                 event_id = self._execute("calendar.event", "create", [event_data])

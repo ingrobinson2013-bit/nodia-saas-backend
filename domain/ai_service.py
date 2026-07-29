@@ -218,6 +218,20 @@ class AIService:
                             res = odoo.cancel_appointment_spa(cita_id, sender_wa_id or "")
                             if not isinstance(res, dict):
                                 res = {"success": True, "message": str(res)}
+                            
+                            # ✅ Sincronizar cancelación en Supabase citas_log
+                            if res.get("success") and tenant_id:
+                                try:
+                                    from infrastructure.repositories.tenant_repo import get_supabase_client
+                                    sb = get_supabase_client()
+                                    if cita_id:
+                                        sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("odoo_event_id", int(cita_id)).execute()
+                                    if sender_wa_id:
+                                        sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id).execute()
+                                    logger.info(f"Supabase citas_log sincronizado: estado='cancelada' para {sender_wa_id} cita_id={cita_id}")
+                                except Exception as se:
+                                    logger.warning(f"No se pudo actualizar citas_log en Supabase al cancelar: {se}")
+
                             tool_result = json.dumps(res, ensure_ascii=False)
                             logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
 
