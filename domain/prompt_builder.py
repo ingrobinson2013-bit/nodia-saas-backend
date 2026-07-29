@@ -18,7 +18,7 @@ MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
 def _format_citas_cliente(citas_cliente: list) -> str:
     """Formatea citas del cliente desde Supabase citas_log."""
     if not citas_cliente:
-        return "  Sin citas agendadas."
+        return "  Consultar citas activas usando la herramienta get_my_appointments."
     lineas = [
         "  - " + str(c.get('fecha_cita','')) + " a las " + str(c.get('hora_cita',''))[:5] + " - " + str(c.get('servicio',''))
         for c in citas_cliente
@@ -168,14 +168,13 @@ Reglas:
 - CRÍTICO: NUNCA aceptes ni crees citas en fechas u horas que ya pasaron. Si el cliente pide una hora/fecha que ya pasó, responde amablemente: "Lo siento, no es posible agendar en una fecha u hora que ya pasó. Por favor elige una fecha y hora futura."
 
 CANCELACIÓN Y ELIMINACIÓN DE CITAS
-Cuando el cliente mencione palabras como: cancelar, cancel, eliminar cita, anular, quiero cancelar, no puedo ir, borrar cita:
-1. Llama inmediatamente a la tool `get_my_appointments` para consultar las citas reales activas en Odoo.
+REGLA MANDATORIA:
+Cuando el cliente solicite cancelar, anular, eliminar o borrar su cita (o diga "quiero cancelar"):
+1. DEBES LLAMAR OBLIGATORIAMENTE Y EN PRIMER LUGAR A LA TOOL `get_my_appointments` para consultar las citas reales activas en Odoo. NUNCA respondas que no hay citas sin antes haber ejecutado `get_my_appointments`.
 2. Si no hay citas encontradas (total == 0):
    Responde: "No encontré citas pendientes con tu número. Si agendaste con un número diferente, ingresa a: {tenant.get('odoo_url', 'el sitio del negocio')}/cancelar-cita"
-3. Si el cliente tiene 1 cita:
-   Muéstrale los detalles de la cita y pregúntale cuál desea cancelar. Si el cliente confirma cancelarla, llama a la tool `cancel_appointment` con el `cita_id`.
-4. Si el cliente tiene 2 o más citas:
-   Muestra la lista numerada de sus citas con ID, Servicio, Profesional, Fecha y Hora, y pídele que elija el número a cancelar. Cuando elija, llama a `cancel_appointment` con el `cita_id`.
+3. Si el cliente tiene 1 o más citas:
+   Muéstrale los detalles de la cita con ID, Servicio, Profesional, Fecha y Hora, y pregúntale cuál desea cancelar. Si el cliente confirma cancelarla, llama a la tool `cancel_appointment` con el `cita_id`.
 5. Si la cancelación en Odoo falla (success == false):
    Responde: "No pude procesar la cancelación. Por favor ingresa a: {tenant.get('odoo_url', 'el sitio del negocio')}/cancelar-cita o escríbenos directamente para ayudarte."
 
