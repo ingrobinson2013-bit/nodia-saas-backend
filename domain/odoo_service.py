@@ -299,6 +299,7 @@ class OdooService:
     def get_client_appointments(self, phone: str = "") -> dict:
         """
         Consulta las citas del cliente en Odoo llamando al endpoint POST /api/spa/mis-citas.
+        Si Odoo retorna error (ej: NumericValueOutOfRange), usa el fallback con ORM search_read.
         """
         if not self.url:
             return {"success": False, "citas": [], "total": 0}
@@ -322,17 +323,79 @@ class OdooService:
             )
             response.raise_for_status()
             data = response.json()
+            if "error" in data:
+                logger.warning(f"Odoo /api/spa/mis-citas devolvió error: {data['error']}. Ejecutando fallback ORM...")
+                return self._fallback_get_client_appointments(clean_phone)
             result = data.get("result", {})
-            if isinstance(result, dict):
+            if isinstance(result, dict) and result.get("success"):
                 return result
+            if isinstance(result, dict) and not result.get("success"):
+                logger.warning("Odoo /api/spa/mis-citas success=False. Ejecutando fallback ORM...")
+                return self._fallback_get_client_appointments(clean_phone)
             return {"success": True, "citas": [], "total": 0}
         except Exception as e:
-            logger.error(f"Error consultando mis-citas en Odoo ({url}): {e}")
-            return {"success": False, "citas": [], "total": 0, "error": str(e)}
+            logger.error(f"Error consultando mis-citas en Odoo ({url}): {e}. Ejecutando fallback ORM...")
+            return self._fallback_get_client_appointments(clean_phone)
+
+    def _fallback_get_client_appointments(self, phone: str) -> dict:
+        """Fallback: busca citas del cliente en calendar.event mediante partner_id."""
+        if not phone:
+            return {"success": True, "citas": [], "total": 0}
+        try:
+            partner_id = self.search_partner(phone)
+            if not partner_id:
+                return {"success": True, "citas": [], "total": 0}
+            
+            events = self._execute(
+                "calendar.event", "search_read",
+                [[["partner_ids", "in", [partner_id]], ["active", "=", True]]],
+                {"fields": ["id", "name", "start", "stop", "description"], "order": "start desc"}
+            )
+            
+            from datetime import datetime, timedelta, timezone
+            bogota_tz = timezone(timedelta(hours=-5))
+            ahora_bogota = datetime.now(bogota_tz)
+            
+            citas = []
+            for ev in events or []:
+                start_str = ev.get("start", "")
+                if start_str:
+                    try:
+                        dt_utc = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                        dt_bogota = dt_utc.astimezone(bogota_tz)
+                        # Solo incluir citas futuras o de las últimas 2 horas
+                        if dt_bogota < ahora_bogota - timedelta(hours=2):
+                            continue
+                        fecha_formatted = dt_bogota.strftime("%d/%m/%Y")
+                        hora_formatted = dt_bogota.strftime("%H:%M")
+                    except Exception:
+                        fecha_formatted = start_str[:10]
+                        hora_formatted = start_str[11:16]
+                else:
+                    fecha_formatted = ""
+                    hora_formatted = ""
+                
+                raw_name = ev.get("name", "")
+                servicio_name = raw_name.split("-")[0].strip() if "-" in raw_name else raw_name
+                
+                citas.append({
+                    "id": ev["id"],
+                    "servicio": servicio_name,
+                    "profesional": "Asignado",
+                    "fecha": fecha_formatted,
+                    "hora": hora_formatted,
+                })
+            
+            logger.info(f"Odoo Fallback get_client_appointments para {phone}: {len(citas)} citas encontradas")
+            return {"success": True, "citas": citas, "total": len(citas)}
+        except Exception as e:
+            logger.error(f"Fallback get_client_appointments error: {e}")
+            return {"success": False, "citas": [], "total": 0}
 
     def cancel_appointment_spa(self, cita_id: int = 0, phone: str = "") -> dict:
         """
         Cancela una cita del cliente en Odoo llamando al endpoint POST /api/spa/cancelar.
+        Si falla, ejecuta el fallback cancel_appointment archivando el evento en Odoo.
         """
         if not self.url or not cita_id:
             return {"success": False, "message": "ID de cita inválido"}
@@ -357,13 +420,22 @@ class OdooService:
             )
             response.raise_for_status()
             data = response.json()
+            if "error" in data:
+                logger.warning(f"Odoo /api/spa/cancelar devolvió error: {data['error']}. Ejecutando fallback ORM...")
+                ok = self.cancel_appointment(int(cita_id))
+                return {"success": ok, "message": "Tu cita ha sido cancelada correctamente." if ok else "No se pudo cancelar la cita."}
             result = data.get("result", {})
-            if isinstance(result, dict):
+            if isinstance(result, dict) and result.get("success"):
                 return result
-            return {"success": True, "message": "Cita cancelada correctamente"}
+            if isinstance(result, dict) and not result.get("success"):
+                logger.warning("Odoo /api/spa/cancelar success=False. Ejecutando fallback ORM...")
+                ok = self.cancel_appointment(int(cita_id))
+                return {"success": ok, "message": "Tu cita ha sido cancelada correctamente." if ok else "No se pudo cancelar la cita."}
+            return {"success": True, "message": "Tu cita ha sido cancelada correctamente."}
         except Exception as e:
-            logger.error(f"Error cancelando cita en Odoo ({url}): {e}")
-            return {"success": False, "message": f"Error al cancelar: {e}"}
+            logger.error(f"Error cancelando cita en Odoo ({url}): {e}. Ejecutando fallback ORM...")
+            ok = self.cancel_appointment(int(cita_id))
+            return {"success": ok, "message": "Tu cita ha sido cancelada correctamente." if ok else "No se pudo cancelar la cita."}
 
     def get_available_slots(self, date_str: str, professional_id: int = None, service_id: int = None) -> list:
         """
