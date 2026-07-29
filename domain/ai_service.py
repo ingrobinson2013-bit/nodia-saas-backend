@@ -245,7 +245,7 @@ class AIService:
                                 service_name=fn_args.get("servicio", ""),
                                 price=fn_args.get("precio", ""),
                                 negocio_servicios=negocio_servicios,
-                                description="Agendado via WhatsApp Bot NODIA",
+                                description="Beautysync - Agendamiento",
                                 professional_name=fn_args.get("profesional_nombre", ""),
                             )
                             if event_id == "PAST_DATE_TIME":
@@ -295,9 +295,53 @@ class AIService:
                         max_tokens=600,
                         temperature=0.4,
                     )
-                    return second.choices[0].message.content.strip(), booking_data
+                    final_text = second.choices[0].message.content.strip()
 
-                return response_message.content.strip(), None
+                    # Safety check: Si el texto afirma cancelación pero no se llamó cancel_appointment
+                    if "cancelada" in final_text.lower() and not any(tc.function.name == "cancel_appointment" for tc in response_message.tool_calls):
+                        logger.warning(f"⚠️ GPT afirmó cancelación en texto sin haber llamado la tool cancel_appointment. Ejecutando cancelación de seguridad para {sender_wa_id}...")
+                        try:
+                            citas_res = odoo.get_client_appointments(sender_wa_id or "")
+                            c_list = citas_res.get("citas", []) if isinstance(citas_res, dict) else []
+                            for c in c_list:
+                                cid = c.get("id")
+                                if cid:
+                                    odoo.cancel_appointment_spa(cid, sender_wa_id or "")
+                                    if tenant_id:
+                                        try:
+                                            from infrastructure.repositories.tenant_repo import get_supabase_client
+                                            sb = get_supabase_client()
+                                            sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("odoo_event_id", int(cid)).execute()
+                                            sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id).execute()
+                                        except Exception:
+                                            pass
+                        except Exception as fe:
+                            logger.error(f"Error en safety cancel: {fe}")
+
+                    return final_text, booking_data
+
+                final_text = response_message.content.strip() if response_message.content else ""
+                if "cancelada" in final_text.lower() and sender_wa_id:
+                    logger.warning(f"⚠️ GPT afirmó cancelación sin tool calls. Ejecutando cancelación de seguridad para {sender_wa_id}...")
+                    try:
+                        citas_res = odoo.get_client_appointments(sender_wa_id or "")
+                        c_list = citas_res.get("citas", []) if isinstance(citas_res, dict) else []
+                        for c in c_list:
+                            cid = c.get("id")
+                            if cid:
+                                odoo.cancel_appointment_spa(cid, sender_wa_id or "")
+                                if tenant_id:
+                                    try:
+                                        from infrastructure.repositories.tenant_repo import get_supabase_client
+                                        sb = get_supabase_client()
+                                        sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("odoo_event_id", int(cid)).execute()
+                                        sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id).execute()
+                                    except Exception:
+                                        pass
+                    except Exception as fe:
+                        logger.error(f"Error en safety cancel: {fe}")
+
+                return final_text, None
 
             else:
                 # Sin Odoo: llamada directa sin tools
