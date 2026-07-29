@@ -379,13 +379,15 @@ class OdooService:
 
             # 1. Búsqueda por partner_ids
             partner_ids = self.find_partner_ids(phone)
+            prof_field = self.professional_field_name or "spa_professional_id"
+            base_fields = ["id", "name", "start", "stop", "description", prof_field]
             for pid in partner_ids:
                 if isinstance(pid, int):
                     try:
                         evs1 = self._execute(
                             "calendar.event", "search_read",
                             [[["partner_ids", "in", [pid]], ["active", "=", True]]],
-                            {"fields": ["id", "name", "start", "stop", "description"], "order": "start desc"}
+                            {"fields": base_fields, "order": "start desc"}
                         )
                         for ev in evs1 or []:
                             events_dict[ev["id"]] = ev
@@ -397,7 +399,7 @@ class OdooService:
                 evs2 = self._execute(
                     "calendar.event", "search_read",
                     [[["spa_customer_phone", "ilike", clean_10], ["active", "=", True]]],
-                    {"fields": ["id", "name", "start", "stop", "description"], "order": "start desc"}
+                    {"fields": base_fields, "order": "start desc"}
                 )
                 for ev in evs2 or []:
                     events_dict[ev["id"]] = ev
@@ -409,7 +411,7 @@ class OdooService:
                 evs3 = self._execute(
                     "calendar.event", "search_read",
                     [[["description", "ilike", clean_10], ["active", "=", True]]],
-                    {"fields": ["id", "name", "start", "stop", "description"], "order": "start desc"}
+                    {"fields": base_fields, "order": "start desc"}
                 )
                 for ev in evs3 or []:
                     events_dict[ev["id"]] = ev
@@ -438,15 +440,29 @@ class OdooService:
                     fecha_formatted = ""
                     hora_formatted = ""
                 
+                prof_field = self.professional_field_name or "spa_professional_id"
+                raw_prof = ev.get(prof_field)
+                if isinstance(raw_prof, (list, tuple)) and len(raw_prof) == 2:
+                    profesional_name = raw_prof[1]  # [id, "Nombre Profesional"]
+                    profesional_id = raw_prof[0]
+                elif isinstance(raw_prof, dict):
+                    profesional_name = raw_prof.get("name", "Asignado")
+                    profesional_id = raw_prof.get("id")
+                else:
+                    profesional_name = "Asignado"
+                    profesional_id = None
+                
                 raw_name = ev.get("name", "")
                 servicio_name = raw_name.split("-")[0].strip() if "-" in raw_name else raw_name
                 
                 citas.append({
                     "id": ev["id"],
                     "servicio": servicio_name,
-                    "profesional": "Asignado",
+                    "profesional": profesional_name,
+                    "profesional_id": profesional_id,
                     "fecha": fecha_formatted,
                     "hora": hora_formatted,
+                    "start_utc": start_str,  # conservamos UTC para comparaciones internas
                 })
             
             logger.info(f"Odoo Fallback get_client_appointments para {phone}: {len(citas)} citas encontradas")

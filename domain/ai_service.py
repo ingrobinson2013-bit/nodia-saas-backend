@@ -269,21 +269,44 @@ class AIService:
                             logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
 
                         elif fn_name == "reschedule_appointment":
-                            cita_id   = fn_args.get("cita_id")
+                            cita_id     = fn_args.get("cita_id")
                             nueva_fecha = fn_args.get("nueva_fecha", "")
                             nueva_hora  = fn_args.get("nueva_hora", "")
 
-                            # 1. Verificar disponibilidad en la nueva fecha/hora
+                            # 1. Obtener la cita actual para saber el profesional asignado
+                            citas_actuales = odoo.get_client_appointments(sender_wa_id or "")
+                            c_list = citas_actuales.get("citas", []) if isinstance(citas_actuales, dict) else []
+                            cita_actual = next((c for c in c_list if c.get("id") == cita_id), None)
+                            profesional_id = cita_actual.get("profesional_id") if cita_actual else None
+                            profesional_nombre = cita_actual.get("profesional", "el profesional") if cita_actual else "el profesional"
+
+                            # 2. Verificar disponibilidad del PROFESIONAL en la nueva fecha/hora (en UTC)
+                            from domain.odoo_service import _bogota_to_utc
+                            nueva_start_utc = _bogota_to_utc(nueva_fecha, nueva_hora)  # "YYYY-MM-DD HH:MM:SS"
                             eventos_dia = odoo.check_availability(nueva_fecha)
+
+                            # Filtrar eventos del mismo profesional en el mismo horario UTC
+                            def _mismo_prof(ev):
+                                if not profesional_id:
+                                    return True  # sin profesional específico, chequear cualquiera
+                                pf = ev.get(odoo.professional_field_name or "spa_professional_id")
+                                if isinstance(pf, (list, tuple)) and len(pf) >= 1:
+                                    return pf[0] == profesional_id
+                                if isinstance(pf, dict):
+                                    return pf.get("id") == profesional_id
+                                return False
+
                             ocupado = any(
-                                ev.get("start", "")[:16].replace("T", " ") == f"{nueva_fecha} {nueva_hora}"
+                                ev.get("start", "")[:16] == nueva_start_utc[:16]
+                                and ev.get("id") != cita_id
+                                and _mismo_prof(ev)
                                 for ev in eventos_dia
-                                if ev.get("id") != cita_id  # ignorar la propia cita
                             )
+
                             if ocupado:
                                 tool_result = json.dumps({
                                     "success": False,
-                                    "message": f"El horario {nueva_hora} del {nueva_fecha} ya está ocupado. Por favor elige otra hora."
+                                    "message": f"Lo siento, {profesional_nombre} ya tiene una cita a las {nueva_hora} del {nueva_fecha}. Por favor elige otra hora."
                                 }, ensure_ascii=False)
                             else:
                                 ok = odoo.reschedule_appointment(int(cita_id), nueva_fecha, nueva_hora)
@@ -308,9 +331,9 @@ class AIService:
                                             logger.warning(f"No se pudo actualizar citas_log en Supabase al reagendar: {se}")
                                     tool_result = json.dumps({
                                         "success": True,
-                                        "message": f"Tu cita ha sido reprogramada al {nueva_fecha} a las {nueva_hora}."
+                                        "message": f"¡Listo! Tu cita ha sido reprogramada con {profesional_nombre} al {nueva_fecha} a las {nueva_hora}."
                                     }, ensure_ascii=False)
-                                    logger.info(f"Odoo reschedule_appointment cita_id={cita_id} → {nueva_fecha} {nueva_hora} ✅")
+                                    logger.info(f"Odoo reschedule_appointment cita_id={cita_id} prof={profesional_nombre} → {nueva_fecha} {nueva_hora} ✅")
                                 else:
                                     tool_result = json.dumps({
                                         "success": False,
