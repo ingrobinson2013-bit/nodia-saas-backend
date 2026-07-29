@@ -125,6 +125,37 @@ TOOL_CANCEL_APPOINTMENT = {
     }
 }
 
+TOOL_RESCHEDULE_APPOINTMENT = {
+    "type": "function",
+    "function": {
+        "name": "reschedule_appointment",
+        "description": (
+            "Reagenda (reprograma) una cita existente del cliente a una nueva fecha y hora. "
+            "Llama esta función cuando el cliente haya confirmado la nueva fecha y hora para reagendar. "
+            "Requiere el ID numérico de la cita (cita_id), la nueva fecha (YYYY-MM-DD) y la nueva hora (HH:MM). "
+            "CRÍTICO: NUNCA digas que la cita fue reagendada sin haber llamado primero a esta herramienta."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cita_id": {
+                    "type": "integer",
+                    "description": "ID numérico de la cita en Odoo a reagendar (ej: 1805)"
+                },
+                "nueva_fecha": {
+                    "type": "string",
+                    "description": "Nueva fecha en formato YYYY-MM-DD (hora Bogotá)"
+                },
+                "nueva_hora": {
+                    "type": "string",
+                    "description": "Nueva hora en formato HH:MM de 24h (hora Bogotá, ej: 10:00, 14:30)"
+                }
+            },
+            "required": ["cita_id", "nueva_fecha", "nueva_hora"]
+        }
+    }
+}
+
 
 class AIService:
     def __init__(self, api_key: str = None, model: str = None):
@@ -168,6 +199,7 @@ class AIService:
                     TOOL_CREATE_APPOINTMENT,
                     TOOL_GET_MY_APPOINTMENTS,
                     TOOL_CANCEL_APPOINTMENT,
+                    TOOL_RESCHEDULE_APPOINTMENT,
                 ]
 
                 response = await self.client.chat.completions.create(
@@ -235,6 +267,55 @@ class AIService:
 
                             tool_result = json.dumps(res, ensure_ascii=False)
                             logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
+
+                        elif fn_name == "reschedule_appointment":
+                            cita_id   = fn_args.get("cita_id")
+                            nueva_fecha = fn_args.get("nueva_fecha", "")
+                            nueva_hora  = fn_args.get("nueva_hora", "")
+
+                            # 1. Verificar disponibilidad en la nueva fecha/hora
+                            eventos_dia = odoo.check_availability(nueva_fecha)
+                            ocupado = any(
+                                ev.get("start", "")[:16].replace("T", " ") == f"{nueva_fecha} {nueva_hora}"
+                                for ev in eventos_dia
+                                if ev.get("id") != cita_id  # ignorar la propia cita
+                            )
+                            if ocupado:
+                                tool_result = json.dumps({
+                                    "success": False,
+                                    "message": f"El horario {nueva_hora} del {nueva_fecha} ya está ocupado. Por favor elige otra hora."
+                                }, ensure_ascii=False)
+                            else:
+                                ok = odoo.reschedule_appointment(int(cita_id), nueva_fecha, nueva_hora)
+                                if ok:
+                                    # Sincronizar en Supabase citas_log
+                                    if tenant_id:
+                                        try:
+                                            from infrastructure.repositories.tenant_repo import get_supabase_client
+                                            sb = get_supabase_client()
+                                            sb.table("citas_log").update({
+                                                "fecha_cita": nueva_fecha,
+                                                "hora_cita":  nueva_hora,
+                                                "estado":     "confirmada"
+                                            }).eq("tenant_id", tenant_id).eq("odoo_event_id", int(cita_id)).execute()
+                                            sb.table("citas_log").update({
+                                                "fecha_cita": nueva_fecha,
+                                                "hora_cita":  nueva_hora,
+                                                "estado":     "confirmada"
+                                            }).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id or "").execute()
+                                            logger.info(f"Supabase citas_log actualizado: reagendada cita {cita_id} → {nueva_fecha} {nueva_hora}")
+                                        except Exception as se:
+                                            logger.warning(f"No se pudo actualizar citas_log en Supabase al reagendar: {se}")
+                                    tool_result = json.dumps({
+                                        "success": True,
+                                        "message": f"Tu cita ha sido reprogramada al {nueva_fecha} a las {nueva_hora}."
+                                    }, ensure_ascii=False)
+                                    logger.info(f"Odoo reschedule_appointment cita_id={cita_id} → {nueva_fecha} {nueva_hora} ✅")
+                                else:
+                                    tool_result = json.dumps({
+                                        "success": False,
+                                        "message": "No se pudo reprogramar la cita. Por favor intenta de nuevo o comunícate con nosotros."
+                                    }, ensure_ascii=False)
 
                         elif fn_name == "create_appointment":
                             # ✅ Crear la cita en Odoo directamente desde ai_service

@@ -181,6 +181,17 @@ REGLA MANDATORIA INVIOLABLE:
 5. Si la cancelación en Odoo falla (success == false):
    Responde: "No pude procesar la cancelación. Por favor ingresa a: {tenant.get('odoo_url', 'el sitio del negocio')}/cancelar-cita o escríbenos directamente para ayudarte."
 
+REPROGRAMACIÓN DE CITAS
+REGLA MANDATORIA INVIOLABLE:
+1. Cuando el cliente solicite reprogramar, cambiar, mover o reagendar su cita:
+   PRIMERO llama a `get_my_appointments` para obtener las citas activas del cliente.
+2. Muéstrale la cita actual con Servicio, Profesional, Fecha y Hora. Pregúntale la nueva fecha y hora deseada.
+3. Verifica disponibilidad con `check_availability` para la nueva fecha antes de confirmar.
+4. Cuando el cliente confirme la nueva fecha y hora (diciendo "sí", "confirmar", "👍", "ok", "dale"):
+   DEBES LLAMAR INMEDIATAMENTE A LA TOOL `reschedule_appointment` con el `cita_id`, `nueva_fecha` y `nueva_hora`.
+   CRÍTICO: NUNCA respondas "Tu cita fue reprogramada" sin haber llamado primero a la tool `reschedule_appointment`.
+5. Si el nuevo horario está ocupado, infórmale y propón opciones disponibles.
+
 PROTOCOLO DE AGENDAMIENTO
 Recolecta EN ORDEN:
 1 Servicio -> 2 Profesional -> 3 Fecha -> 4 Hora -> 5 Nombre
