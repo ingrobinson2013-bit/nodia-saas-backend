@@ -337,12 +337,33 @@ class OdooService:
             logger.error(f"Error consultando mis-citas en Odoo ({url}): {e}. Ejecutando fallback ORM...")
             return self._fallback_get_client_appointments(clean_phone)
 
+    def find_partner_id(self, phone: str) -> int | None:
+        """Busca solo un contacto existente por teléfono (sin crear uno nuevo)."""
+        if not self.uid or not phone:
+            return None
+        try:
+            clean = phone[-10:] if len(phone) >= 10 else phone
+            ids = self._execute(
+                "res.partner", "search",
+                [[["phone", "ilike", clean]]]
+            )
+            if ids:
+                return ids[0]
+            ids_alt = self._execute(
+                "res.partner", "search",
+                [[["phone", "ilike", phone]]]
+            )
+            return ids_alt[0] if ids_alt else None
+        except Exception as e:
+            logger.warning(f"Odoo find_partner_id error: {e}")
+            return None
+
     def _fallback_get_client_appointments(self, phone: str) -> dict:
         """Fallback: busca citas del cliente en calendar.event mediante partner_id."""
         if not phone:
             return {"success": True, "citas": [], "total": 0}
         try:
-            partner_id = self.search_partner(phone)
+            partner_id = self.find_partner_id(phone)
             if not partner_id:
                 return {"success": True, "citas": [], "total": 0}
             
