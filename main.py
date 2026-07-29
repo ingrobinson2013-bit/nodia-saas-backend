@@ -68,6 +68,16 @@ app.include_router(campaigns_router, prefix="/api", tags=["WhatsApp Campaigns"])
 async def health():
     return {"status": "ok", "service": "nodia-saas-backend", "version": "1.0.3"}
 
+@app.get("/debug/openai", tags=["Sistema"])
+async def debug_openai():
+    from domain.ai_service import AIService
+    ai = AIService()
+    try:
+        await ai.client.models.list()
+        return {"status": "ok", "openai_key_valid": True, "model": ai.model}
+    except Exception as e:
+        return {"status": "error", "openai_key_valid": False, "error": str(e)}
+
 
 # ── Run ───────────────────────────────────────────────────
 if __name__ == "__main__":

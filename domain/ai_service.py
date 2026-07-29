@@ -262,8 +262,9 @@ class AIService:
                             tool_result = json.dumps({"error": "Funcion no reconocida"})
 
                         messages.append({
-                            "role": "tool",
                             "tool_call_id": tool_call.id,
+                            "role": "tool",
+                            "name": fn_name,
                             "content": tool_result,
                         })
 
