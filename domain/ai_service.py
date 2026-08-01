@@ -14,11 +14,27 @@ import json
 
 logger = logging.getLogger(__name__)
 
-def is_within_schedule(date_str: str, time_str: str, horario_str: str) -> tuple[bool, str]:
+def is_within_schedule(date_str: str, time_str: str, horario_str: str, check_past: bool = True) -> tuple[bool, str]:
     """
-    Verifica si una fecha y hora (Bogotá) está dentro del horario comercial.
+    Verifica si una fecha y hora (Bogotá) está dentro del horario comercial y en el presente/futuro.
     Retorna (es_valido, mensaje_error)
     """
+    if check_past:
+        try:
+            from datetime import datetime, timezone, timedelta
+            BOGOTA_TZ = timezone(timedelta(hours=-5))
+            now_bogota = datetime.now(BOGOTA_TZ)
+            
+            # 1. Validar que no sea una fecha u hora en el pasado (Bogotá)
+            h_req, m_req = map(int, time_str.split(':'))
+            dt_req = datetime.strptime(date_str, "%Y-%m-%d")
+            dt_req_full = dt_req.replace(hour=h_req, minute=m_req, tzinfo=BOGOTA_TZ)
+            
+            if dt_req_full < now_bogota - timedelta(minutes=5):
+                return False, "La fecha u hora seleccionada ya pasó. Por favor selecciona una fecha y hora en el presente o futuro."
+        except Exception as pe:
+            logger.warning(f"Error comparando fecha/hora con el tiempo actual en Bogotá: {pe}")
+
     if not horario_str:
         return True, ""
     try:
@@ -354,7 +370,7 @@ class AIService:
                             
                             dia_abierto = True
                             if horario_comercial:
-                                ok_dia, err_dia = is_within_schedule(date_str, "12:00", horario_comercial)
+                                ok_dia, err_dia = is_within_schedule(date_str, "12:00", horario_comercial, check_past=False)
                                 if not ok_dia and "cerrado" in err_dia.lower():
                                     dia_abierto = False
 
