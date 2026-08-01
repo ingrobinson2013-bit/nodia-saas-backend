@@ -14,6 +14,100 @@ import json
 
 logger = logging.getLogger(__name__)
 
+def is_within_schedule(date_str: str, time_str: str, horario_str: str) -> tuple[bool, str]:
+    """
+    Verifica si una fecha y hora (Bogotá) está dentro del horario comercial.
+    Retorna (es_valido, mensaje_error)
+    """
+    if not horario_str:
+        return True, ""
+    try:
+        from datetime import datetime
+        import re
+        dt_cita = datetime.strptime(date_str, "%Y-%m-%d")
+        weekday = dt_cita.weekday() # 0=Lunes, ..., 6=Domingo
+        
+        days_map = {
+            'lun': 0, 'mar': 1, 'mie': 2, 'jue': 3, 'vie': 4, 'sab': 5, 'sáb': 5, 'dom': 6,
+            'lunes': 0, 'martes': 1, 'miercoles': 2, 'jueves': 3, 'viernes': 4, 'sabado': 5, 'sábado': 5, 'domingo': 6
+        }
+        
+        h_req, m_req = map(int, time_str.split(':'))
+        time_req_val = h_req * 60 + m_req
+        
+        parts = [p.strip() for p in horario_str.split(',')]
+        day_matched = False
+        allowed_range = None
+        
+        def parse_time_str(t_str):
+            t_str = t_str.lower().strip()
+            match = re.match(r'(\d+)(?::(\d+))?\s*(am|pm)', t_str)
+            if not match:
+                return None
+            h = int(match.group(1))
+            m = int(match.group(2)) if match.group(2) else 0
+            period = match.group(3)
+            
+            if period == 'pm' and h != 12:
+                h += 12
+            elif period == 'am' and h == 12:
+                h = 0
+            return h * 60 + m
+
+        for part in parts:
+            match_days_hours = re.match(r'([a-záéíóú\-]+)\s+(\d+(?::\d+)?\s*(?:am|pm))\s*-\s*(\d+(?::\d+)?\s*(?:am|pm))', part, re.IGNORECASE)
+            if not match_days_hours:
+                continue
+                
+            days_part = match_days_hours.group(1).lower()
+            start_time_str = match_days_hours.group(2)
+            end_time_str = match_days_hours.group(3)
+            
+            covered_days = []
+            if '-' in days_part:
+                d_start_str, d_end_str = days_part.split('-')
+                d_start = days_map.get(d_start_str.strip())
+                d_end = days_map.get(d_end_str.strip())
+                if d_start is not None and d_end is not None:
+                    if d_start <= d_end:
+                        covered_days = list(range(d_start, d_end + 1))
+                    else:
+                        covered_days = list(range(d_start, 7)) + list(range(0, d_end + 1))
+            else:
+                d_single = days_map.get(days_part.strip())
+                if d_single is not None:
+                    covered_days = [d_single]
+                    
+            if weekday in covered_days:
+                day_matched = True
+                start_val = parse_time_str(start_time_str)
+                end_val = parse_time_str(end_time_str)
+                if start_val is not None and end_val is not None:
+                    allowed_range = (start_val, end_val)
+                    break
+                    
+        if not day_matched:
+            return False, "El negocio está cerrado ese día."
+            
+        if allowed_range:
+            start_val, end_val = allowed_range
+            if start_val <= time_req_val <= end_val:
+                return True, ""
+            else:
+                h_start, m_start = divmod(start_val, 60)
+                h_end, m_end = divmod(end_val, 60)
+                def format_h(h, m):
+                    period = 'am' if h < 12 else 'pm'
+                    h_12 = h if 0 < h <= 12 else h - 12 if h > 12 else 12
+                    return f"{h_12}:{str(m).zfill(2)} {period}"
+                return False, f"El horario solicitado está fuera del horario de atención de ese día ({format_h(h_start, m_start)} a {format_h(h_end, m_end)})."
+                
+        return True, ""
+    except Exception as e:
+        logger.warning(f"Error parseando horario: {e}")
+        return True, ""
+
+
 SYSTEM_PROMPT_DEFAULT = (
     "Eres un asistente de atención al cliente amable, profesional y conciso. "
     "Responde siempre en español colombiano. "
@@ -231,6 +325,18 @@ class AIService:
                         api_key=odoo_config["api_key"],
                     )
 
+                    # Cargar configuración del horario del negocio desde Supabase
+                    horario_comercial = ""
+                    if tenant_id:
+                        try:
+                            from infrastructure.database import get_supabase
+                            sb = get_supabase()
+                            tc_res = sb.table("tenant_config").select("horario").eq("tenant_id", tenant_id).execute()
+                            if tc_res.data:
+                                horario_comercial = tc_res.data[0].get("horario", "")
+                        except Exception as tc_err:
+                            logger.warning(f"No se pudo cargar el horario del tenant {tenant_id} en ai_service: {tc_err}")
+
                     messages.append(response_message)
                     booking_data = None  # resultado de create_appointment si aplica
 
@@ -246,11 +352,23 @@ class AIService:
                             prof_id = odoo.find_professional_id(prof_name) if prof_name else None
                             serv_id = odoo.find_service_id(serv_name) if serv_name else None
                             
+                            dia_abierto = True
+                            if horario_comercial:
+                                ok_dia, err_dia = is_within_schedule(date_str, "12:00", horario_comercial)
+                                if not ok_dia and "cerrado" in err_dia.lower():
+                                    dia_abierto = False
+
                             ofrece_servicio = True
                             if prof_id and serv_id:
                                 ofrece_servicio = odoo.check_professional_specialty(prof_id, serv_id)
 
-                            if not ofrece_servicio:
+                            if not dia_abierto:
+                                tool_result = json.dumps({
+                                    "success": False,
+                                    "abierto": False,
+                                    "message": f"Lo siento, el negocio está cerrado ese día. Nuestro horario de atención es: {horario_comercial}"
+                                }, ensure_ascii=False)
+                            elif not ofrece_servicio:
                                 tool_result = json.dumps({
                                     "success": False,
                                     "ofrece_servicio": False,
@@ -263,12 +381,13 @@ class AIService:
                                 tool_result = json.dumps({
                                     "success": True,
                                     "ofrece_servicio": True,
+                                    "abierto": True,
                                     "eventos_ocupados": result, 
                                     "slots_disponibles": slots,
                                     "profesional_solicitado": {"nombre": prof_name, "id": prof_id} if prof_name else None,
                                     "servicio_solicitado": {"nombre": serv_name, "id": serv_id} if serv_name else None
                                 }, ensure_ascii=False)
-                            logger.info(f"Odoo check_availability: {date_str} prof={prof_name}({prof_id}) serv={serv_name}({serv_id}) ofrece={ofrece_servicio} → {len(result) if ofrece_servicio else 0} eventos")
+                            logger.info(f"Odoo check_availability: {date_str} prof={prof_name}({prof_id}) ofrece={ofrece_servicio} abierto={dia_abierto} → {len(result) if (ofrece_servicio and dia_abierto) else 0} eventos")
 
                         elif fn_name == "get_my_appointments":
                             client_phone = sender_wa_id or fn_args.get("phone") or ""
@@ -305,6 +424,17 @@ class AIService:
                             cita_id     = fn_args.get("cita_id")
                             nueva_fecha = fn_args.get("nueva_fecha", "")
                             nueva_hora  = fn_args.get("nueva_hora", "")
+
+                            # 0. Validar si la nueva fecha/hora está dentro del horario comercial
+                            if horario_comercial:
+                                ok_sch, err_sch = is_within_schedule(nueva_fecha, nueva_hora, horario_comercial)
+                                if not ok_sch:
+                                    tool_result = json.dumps({
+                                        "success": False,
+                                        "message": f"Lo siento, la nueva hora {nueva_hora} no es posible. {err_sch}"
+                                    }, ensure_ascii=False)
+                                    logger.info(f"Odoo reschedule_appointment: horario no permitido → {nueva_fecha} {nueva_hora}")
+                                    continue
 
                             # 1. Obtener la cita actual para saber el profesional asignado
                             citas_actuales = odoo.get_client_appointments(sender_wa_id or "")
@@ -374,12 +504,27 @@ class AIService:
                                     }, ensure_ascii=False)
 
                         elif fn_name == "create_appointment":
+                            fecha_req = fn_args.get("fecha", "")
+                            hora_req = fn_args.get("hora", "00:00")
+
+                            # 0. Validar si la fecha/hora está dentro del horario comercial
+                            if horario_comercial:
+                                ok_sch, err_sch = is_within_schedule(fecha_req, hora_req, horario_comercial)
+                                if not ok_sch:
+                                    tool_result = json.dumps({
+                                        "success": False,
+                                        "error_code": "OUTSIDE_SCHEDULE",
+                                        "message": f"Lo siento, la hora {hora_req} no es posible. {err_sch}"
+                                    }, ensure_ascii=False)
+                                    logger.info(f"Odoo create_appointment: horario no permitido → {fecha_req} {hora_req}")
+                                    continue
+
                             # ✅ Crear la cita en Odoo directamente desde ai_service
                             event_id = odoo.create_appointment(
                                 name=fn_args.get("cliente_nombre", sender_name or sender_wa_id or "Cliente"),
                                 phone=sender_wa_id or "",
-                                date_str=fn_args.get("fecha", ""),
-                                time_str=fn_args.get("hora", "00:00"),
+                                date_str=fecha_req,
+                                time_str=hora_req,
                                 service_name=fn_args.get("servicio", ""),
                                 price=fn_args.get("precio", ""),
                                 negocio_servicios=negocio_servicios,
