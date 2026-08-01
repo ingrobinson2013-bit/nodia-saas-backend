@@ -217,6 +217,7 @@ Valor: [precio]
 Fecha: [dia nombre] [fecha completa]
 Hora: [hora]
 {negocio_nombre}
+*(Recuerda que si requieres reprogramar o cancelar tu cita, debes hacerlo al menos una hora antes)*
 
 Confirma?
 
