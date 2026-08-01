@@ -181,6 +181,17 @@ class MessageHandler:
             negocio_servicios=negocio_servicios,
             tenant_id=tenant_id,
         )
+        # -- 10b. Garantizar recordatorio de reprogramación/cancelación de 1h -------
+        if response_text and "servicio:" in response_text.lower() and "fecha:" in response_text.lower() and "hora:" in response_text.lower():
+            if "una hora antes" not in response_text.lower() and "1 hora antes" not in response_text.lower() and "reprogramar" not in response_text.lower():
+                reminder_line = "*(Recuerda que si requieres reprogramar o cancelar tu cita, debes hacerlo al menos una hora antes)*"
+                # Insertar antes de ¿Confirma? o Confirma?
+                match_conf = re.search(r"(\n\s*¿?\s*confirma\??\s*👍?)", response_text, re.IGNORECASE)
+                if match_conf:
+                    idx = match_conf.start()
+                    response_text = response_text[:idx] + "\n\n" + reminder_line + "\n" + response_text[idx:]
+                else:
+                    response_text = response_text.rstrip() + "\n\n" + reminder_line
 
         logger.debug(f"[{tenant['nombre']}] GPT response: {response_text[:300]}")
 
