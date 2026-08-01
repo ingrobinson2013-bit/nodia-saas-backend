@@ -320,25 +320,43 @@ class MessageHandler:
 
             elif action == "CANCEL" and odoo_config:
                 date_str = crm_action.get("date", "")
+                time_str = crm_action.get("time", "")
                 try:
                     from domain.odoo_service import OdooService
                     odoo = OdooService(**odoo_config)
-                    cita_result = (
+
+                    # Buscar TODAS las citas activas del cliente (no canceladas ni reagendadas)
+                    q = (
                         db.table("citas_log")
-                        .select("id, odoo_event_id")
+                        .select("id, odoo_event_id, fecha_cita, hora_cita")
                         .eq("tenant_id", tenant_id)
                         .eq("wa_from", sender_wa_id)
-                        .eq("fecha_cita", date_str)
-                        .execute()
+                        .neq("estado", "cancelada")
+                        .neq("estado", "reagendada")
                     )
+                    # Si GPT indicó fecha concreta, filtrar por ella
+                    if date_str:
+                        q = q.eq("fecha_cita", date_str)
+                    # Si GPT indicó hora concreta, filtrar por ella
+                    if time_str:
+                        hora_norm = time_str[:5] + ":00" if len(time_str) == 5 else time_str
+                        q = q.eq("hora_cita", hora_norm)
+
+                    cita_result = q.order("fecha_cita", desc=False).execute()
+
                     if cita_result.data:
-                        cita = cita_result.data[0]
-                        if cita.get("odoo_event_id"):
-                            odoo.cancel_appointment(int(cita["odoo_event_id"]))
-                        db.table("citas_log").update({"estado": "cancelada"}).eq("id", cita["id"]).execute()
-                        logger.info(f"[{tenant['nombre']}] Cita cancelada: {date_str} — {sender_wa_id}")
+                        canceladas_ids = []
+                        for cita in cita_result.data:
+                            eid = cita.get("odoo_event_id")
+                            if eid:
+                                # Eliminar de Odoo (unlink)
+                                odoo.cancel_appointment(int(eid))
+                            # Marcar como cancelada en Supabase
+                            db.table("citas_log").update({"estado": "cancelada"}).eq("id", cita["id"]).execute()
+                            canceladas_ids.append(cita["id"])
+                        logger.info(f"[{tenant['nombre']}] Cita(s) cancelada(s): {canceladas_ids} — {sender_wa_id}")
                     else:
-                        logger.warning(f"CANCEL: no se encontro cita para {sender_wa_id} {date_str}")
+                        logger.warning(f"CANCEL: no se encontro cita activa para {sender_wa_id} date={date_str} time={time_str}")
                 except Exception as e:
                     logger.error(f"Error procesando CANCEL: {e}")
 
