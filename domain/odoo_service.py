@@ -776,13 +776,23 @@ class OdooService:
             )
             prod_map = {p["id"]: p["name"] for p in prods or [] if p.get("id") and p.get("name")}
             
+            # Nombres de sistema que nunca deben aparecer como profesionales al cliente
+            SKIP_NAMES = {"administrator", "admin", "colaboradora", "colaborador"}
+            
             result = []
             for emp in employees or []:
+                emp_name = (emp.get("name") or "").strip()
+                # Excluir cuentas de sistema por nombre
+                if emp_name.lower() in SKIP_NAMES:
+                    continue
                 specialty_ids = emp.get("spa_specialties", []) or []
                 specialty_names = [prod_map[sid] for sid in specialty_ids if sid in prod_map]
+                # Excluir empleados sin ninguna especialidad asignada (no son profesionales activos)
+                if not specialty_names:
+                    continue
                 result.append({
                     "id": emp.get("id"),
-                    "name": emp.get("name"),
+                    "name": emp_name,
                     "specialties": specialty_names
                 })
                 
