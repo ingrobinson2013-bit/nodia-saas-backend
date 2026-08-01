@@ -588,11 +588,51 @@ class OdooService:
             logger.error(f"Error reagendando cita {event_id}: {e}")
             return False
 
-    def check_availability(self, date_str: str) -> list:
+    def find_professional_id(self, name: str) -> int | None:
+        """Busca el ID de un profesional por coincidencia parcial de su nombre."""
+        if not self.uid or not name:
+            return None
+        try:
+            profs = self.get_professionals()
+            name_clean = name.lower().strip()
+            # 1. Coincidencia exacta o parcial
+            for p in profs:
+                p_name = p.get("name", "").lower()
+                if name_clean in p_name or p_name in name_clean:
+                    return p.get("id")
+            return None
+        except Exception as e:
+            logger.warning(f"Error en find_professional_id: {e}")
+            return None
+
+    def check_professional_specialty(self, professional_id: int, service_id: int) -> bool:
+        """
+        Verifica si un profesional tiene asignada una especialidad (servicio) en Odoo.
+        """
+        if not self.uid or not professional_id or not service_id:
+            return True  # por defecto si no hay info, permitimos para no bloquear
+        try:
+            # Consultar hr.employee para ver si el service_id (product.template) está en spa_specialties
+            emp = self._execute(
+                "hr.employee", "read",
+                [[professional_id]],
+                {"fields": ["spa_specialties"]}
+            )
+            if emp and isinstance(emp, list):
+                specialties = emp[0].get("spa_specialties", [])
+                if specialties and isinstance(specialties, list):
+                    return service_id in specialties
+            return False
+        except Exception as e:
+            logger.warning(f"Error en check_professional_specialty para prof={professional_id} serv={service_id}: {e}")
+            return True  # en caso de error/campo no existente, no bloquear
+
+    def check_availability(self, date_str: str, professional_id: int = None) -> list:
         """
         Devuelve los eventos del negocio para un día (en UTC), añadiendo campos
         en hora local de Bogotá (inicio_bogota, fin_bogota) para el Agente IA.
         date_str en formato YYYY-MM-DD (hora Bogotá).
+        Filtra por profesional_id si se especifica.
         """
         if not self.uid:
             return []
@@ -604,9 +644,13 @@ class OdooService:
             if self.professional_field_name:
                 fields_to_read.append(self.professional_field_name)
 
+            domain = [["start", ">=", start_utc], ["start", "<=", end_utc], ["active", "=", True]]
+            if professional_id and self.professional_field_name:
+                domain.append([self.professional_field_name, "=", professional_id])
+
             events = self._execute(
                 "calendar.event", "search_read",
-                [[["start", ">=", start_utc], ["start", "<=", end_utc], ["active", "=", True]]],
+                [domain],
                 {"fields": fields_to_read},
             )
 

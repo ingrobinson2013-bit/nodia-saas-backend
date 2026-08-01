@@ -29,7 +29,7 @@ TOOL_CHECK_AVAILABILITY = {
         "description": (
             "Consulta las citas ocupadas en el calendario del negocio para una fecha específica. "
             "Llama esta función cuando el cliente proponga una fecha/hora para verificar disponibilidad. "
-            "Retorna lista de eventos con horas en Bogotá ('inicio_bogota' y 'fin_bogota') y el profesional asignado ('profesional_nombre')."
+            "Soporta filtros opcionales de profesional y servicio si ya se conocen o fueron solicitados."
         ),
         "parameters": {
             "type": "object",
@@ -37,6 +37,14 @@ TOOL_CHECK_AVAILABILITY = {
                 "date_str": {
                     "type": "string",
                     "description": "Fecha a consultar en formato YYYY-MM-DD (hora Bogotá)"
+                },
+                "professional_name": {
+                    "type": "string",
+                    "description": "Nombre opcional del profesional solicitado (ej: Jose Roa, Valentina)"
+                },
+                "service_name": {
+                    "type": "string",
+                    "description": "Nombre opcional del servicio solicitado (ej: Corte Caballero Tendencia)"
                 }
             },
             "required": ["date_str"]
@@ -231,11 +239,36 @@ class AIService:
                         fn_args = json.loads(tool_call.function.arguments or "{}")
 
                         if fn_name == "check_availability":
-                            result = odoo.check_availability(fn_args.get("date_str", ""))
-                            # También consultar slots libres del endpoint spa si están disponibles
-                            slots = odoo.get_available_slots(fn_args.get("date_str", ""))
-                            tool_result = json.dumps({"eventos_ocupados": result, "slots_disponibles": slots}, ensure_ascii=False)
-                            logger.info(f"Odoo check_availability: {fn_args.get('date_str')} → {len(result)} eventos")
+                            date_str = fn_args.get("date_str", "")
+                            prof_name = fn_args.get("professional_name")
+                            serv_name = fn_args.get("service_name")
+                            
+                            prof_id = odoo.find_professional_id(prof_name) if prof_name else None
+                            serv_id = odoo.find_service_id(serv_name) if serv_name else None
+                            
+                            ofrece_servicio = True
+                            if prof_id and serv_id:
+                                ofrece_servicio = odoo.check_professional_specialty(prof_id, serv_id)
+
+                            if not ofrece_servicio:
+                                tool_result = json.dumps({
+                                    "success": False,
+                                    "ofrece_servicio": False,
+                                    "message": f"Lo siento, el profesional '{prof_name}' no ofrece el servicio '{serv_name}' en su catálogo."
+                                }, ensure_ascii=False)
+                            else:
+                                result = odoo.check_availability(date_str, professional_id=prof_id)
+                                slots = odoo.get_available_slots(date_str, professional_id=prof_id, service_id=serv_id)
+                                
+                                tool_result = json.dumps({
+                                    "success": True,
+                                    "ofrece_servicio": True,
+                                    "eventos_ocupados": result, 
+                                    "slots_disponibles": slots,
+                                    "profesional_solicitado": {"nombre": prof_name, "id": prof_id} if prof_name else None,
+                                    "servicio_solicitado": {"nombre": serv_name, "id": serv_id} if serv_name else None
+                                }, ensure_ascii=False)
+                            logger.info(f"Odoo check_availability: {date_str} prof={prof_name}({prof_id}) serv={serv_name}({serv_id}) ofrece={ofrece_servicio} → {len(result) if ofrece_servicio else 0} eventos")
 
                         elif fn_name == "get_my_appointments":
                             client_phone = sender_wa_id or fn_args.get("phone") or ""
