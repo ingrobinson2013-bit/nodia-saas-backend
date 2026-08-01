@@ -152,9 +152,18 @@ CITAS DE ESTE CLIENTE EN {negocio_nombre}
 {citas_cliente_texto}
 -> Si tiene cita proxima, recuerdasela ANTES de agendar una nueva.
 
-HORAS OCUPADAS DEL NEGOCIO (NO OFREZCAS ESTAS)
-{citas_negocio_texto}
--> IMPORTANTE: Si un cliente pide cita con un profesional específico en una fecha, verifica si no hay otra cita en 'HORAS OCUPADAS' a esa misma hora. Si está ocupada, infórmale amablemente: "Uy, para esa hora ya está ocupado. ¿Le sirve a las [otra hora] o prefiere con otro barbero?".
+DISPONIBILIDAD Y ASIGNACIÓN DE PROFESIONALES (REGLA MANDATORIA)
+- Cuando el cliente pida una fecha y hora para un profesional específico:
+  1. Ejecuta la herramienta `check_availability` para ver las citas reservadas en Odoo para ese día.
+  2. Si el profesional solicitado YA está ocupado a la hora pedida (tiene un evento asignado a esa hora):
+     - Revisa en los eventos ocupados cuáles de los otros "Profesionales Disponibles" están LIBRES a esa misma hora.
+     - Ofrécele al cliente opciones claras:
+       * Cambiar la hora para ser atendido por el profesional que prefiere (ej: "Uy, con Jose Roa ya está ocupado a las 10:00 am. ¿Te sirve a las 10:30 am con él?").
+       * Mantener la hora seleccionada pero agendar con otro profesional que esté libre en ese momento (ej: "O si prefieres a las 10:00 am, tengo libre a Paola Roa o Camilo Guevara. ¿Te queda bien alguno de ellos?").
+- Si el cliente elige "Cualquiera" o no tiene preferencia de profesional:
+  1. Busca cuál de los "Profesionales Disponibles" está LIBRE a la hora elegida.
+  2. Asígnale al primero que encuentres libre e infórmale con quién quedó agendado (ej: "Listo, te agendé con Paola Roa para las 10:00 am").
+  3. Si TODOS los profesionales están ocupados a esa hora, sugiérele otras horas libres del día o pregúntale qué otra hora le sirve.
 
 FECHA Y HORA - BOGOTA, COLOMBIA (UTC-5)
 Ahora: {hora_bogota} - {dia_nombre} {now_bogota.day} de {mes_nombre} de {now_bogota.year}
@@ -277,8 +286,18 @@ CITAS DE ESTE CLIENTE (ACTUALIZADO EN TIEMPO REAL)
 {citas_cliente_texto}
 -> Si tiene cita proxima, recuerdasela ANTES de agendar una nueva.
 
-HORAS OCUPADAS HOY (NO OFREZCAS ESTAS)
-{citas_negocio_texto}
+DISPONIBILIDAD Y ASIGNACIÓN DE PROFESIONALES (REGLA MANDATORIA)
+- Cuando el cliente pida una fecha y hora para un profesional específico:
+  1. Ejecuta la herramienta `check_availability` para ver las citas reservadas en Odoo para ese día.
+  2. Si el profesional solicitado YA está ocupado a la hora pedida (tiene un evento asignado a esa hora):
+     - Revisa en los eventos ocupados cuáles de los otros "Profesionales Disponibles" están LIBRES a esa misma hora.
+     - Ofrécele al cliente opciones claras:
+       * Cambiar la hora para ser atendido por el profesional que prefiere (ej: "Uy, con Jose Roa ya está ocupado a las 10:00 am. ¿Te sirve a las 10:30 am con él?").
+       * Mantener la hora seleccionada pero agendar con otro profesional que esté libre en ese momento (ej: "O si prefieres a las 10:00 am, tengo libre a Paola Roa o Camilo Guevara. ¿Te queda bien alguno de ellos?").
+- Si el cliente elige "Cualquiera" o no tiene preferencia de profesional:
+  1. Busca cuál de los "Profesionales Disponibles" está LIBRE a la hora elegida.
+  2. Asígnale al primero que encuentres libre e infórmale con quién quedó agendado (ej: "Listo, te agendé con Paola Roa para las 10:00 am").
+  3. Si TODOS los profesionales están ocupados a esa hora, sugiérele otras horas libres del día o pregúntale qué otra hora le sirve.
 
 FECHA Y HORA ACTUAL - BOGOTA (UTC-5)
 Ahora: {hora_bogota} - {dia_nombre} {now_bogota.day} de {mes_nombre} de {now_bogota.year}
