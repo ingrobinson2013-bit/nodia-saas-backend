@@ -584,15 +584,15 @@ class OdooService:
             return []
 
     def cancel_appointment(self, event_id: int) -> bool:
-        """Archiva (cancela) una cita en Odoo estableciendo active=False."""
+        """Elimina (unlink) por completo una cita en Odoo para liberar el espacio."""
         if not self.uid or not event_id:
             return False
         try:
-            self._execute("calendar.event", "write", [[event_id], {"active": False}])
-            logger.info(f"Odoo: cita {event_id} cancelada (active=False)")
+            self._execute("calendar.event", "unlink", [[event_id]])
+            logger.info(f"Odoo: cita {event_id} eliminada por completo (unlink)")
             return True
         except Exception as e:
-            logger.error(f"Error cancelando cita {event_id}: {e}")
+            logger.error(f"Error eliminando cita {event_id}: {e}")
             return False
 
     def reschedule_appointment(
