@@ -147,7 +147,12 @@ class MessageHandler:
             from domain.odoo_service import OdooService
             odoo_svc = OdooService(**odoo_config)
             profesionales_odoo = odoo_svc.get_professionals()
-            profesionales = [p.get("name") for p in profesionales_odoo if p.get("name")]
+            for p in profesionales_odoo:
+                p_name = p.get("name", "")
+                specs = p.get("specialties", [])
+                if p_name:
+                    specs_text = ", ".join(specs) if specs else "Cualquiera"
+                    profesionales.append(f"- {p_name} (ofrece: {specs_text})")
 
         ai_prompt_manual = tenant.get("ai_prompt") or ""
         if ai_prompt_manual and len(ai_prompt_manual.strip()) > 50:

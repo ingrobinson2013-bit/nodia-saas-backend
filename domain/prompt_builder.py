@@ -276,7 +276,7 @@ def inject_dynamic_context(
     citas_negocio_texto = _format_citas_negocio(citas_negocio)
     tenant_id = tenant.get("tenant_id", "")
     
-    profesionales_texto = ", ".join(profesionales) if profesionales else "Cualquiera"
+    profesionales_texto = "\n".join(profesionales) if profesionales else "Cualquiera"
 
     dynamic_block = f"""
 

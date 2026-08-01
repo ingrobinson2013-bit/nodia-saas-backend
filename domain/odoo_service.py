@@ -737,7 +737,7 @@ class OdooService:
             return []
 
     def get_professionals(self) -> list:
-        """Devuelve los profesionales activos en Odoo (con caché simple)."""
+        """Devuelve los profesionales activos en Odoo con sus especialidades (con caché simple)."""
         if not self.uid:
             return []
         
@@ -750,24 +750,40 @@ class OdooService:
         cache_key = f"{self.url}_{self.db}"
         
         if cache_key in _PROFESSIONALS_CACHE and cache_key in _PROFESSIONALS_CACHE_TIME:
-            if (now - _PROFESSIONALS_CACHE_TIME[cache_key]).total_seconds() < 3600:
+            if (now - _PROFESSIONALS_CACHE_TIME[cache_key]).total_seconds() < 1800:
                 return _PROFESSIONALS_CACHE[cache_key]
 
         try:
-            # Buscar en hr.employee o en res.users segun lo que use el modulo.
-            # En Odoo normalmente los profesionales de calendar son empleados o usuarios.
-            # Asumiremos hr.employee ya que el field inspeccionado es hr.employee.
+            # 1. Obtener empleados activos y sus especialidades
             employees = self._execute(
                 "hr.employee", "search_read",
                 [[["active", "=", True]]],
+                {"fields": ["id", "name", "spa_specialties"]}
+            )
+            
+            # 2. Obtener nombres de productos/servicios para mapear especialidades
+            prods = self._execute(
+                "product.template", "search_read",
+                [],
                 {"fields": ["id", "name"]}
             )
-            result = employees or []
+            prod_map = {p["id"]: p["name"] for p in prods or [] if p.get("id") and p.get("name")}
+            
+            result = []
+            for emp in employees or []:
+                specialty_ids = emp.get("spa_specialties", []) or []
+                specialty_names = [prod_map[sid] for sid in specialty_ids if sid in prod_map]
+                result.append({
+                    "id": emp.get("id"),
+                    "name": emp.get("name"),
+                    "specialties": specialty_names
+                })
+                
             _PROFESSIONALS_CACHE[cache_key] = result
             _PROFESSIONALS_CACHE_TIME[cache_key] = now
             return result
         except Exception as e:
-            logger.error(f"Error consultando profesionales en Odoo: {e}")
+            logger.error(f"Error consultando profesionales con especialidades en Odoo: {e}")
             return []
 
     def get_recent_events(self, since_minutes: int = 2) -> list:
