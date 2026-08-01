@@ -392,6 +392,12 @@ class AIService:
                                     "error_code": "PAST_DATE_TIME",
                                     "message": "Lo siento, no es posible agendar en una fecha u hora que ya pasó. Por favor elige una fecha y hora futura."
                                 }, ensure_ascii=False)
+                            elif event_id == "SPECIALTY_INCOMPATIBLE":
+                                tool_result = json.dumps({
+                                    "success": False,
+                                    "error_code": "SPECIALTY_INCOMPATIBLE",
+                                    "message": f"Lo siento, el profesional '{fn_args.get('profesional_nombre')}' no ofrece el servicio '{fn_args.get('servicio')}' en su catálogo."
+                                }, ensure_ascii=False)
                             elif event_id:
                                 logger.info(
                                     f"✅ Odoo: cita creada tool_call event_id={event_id} "

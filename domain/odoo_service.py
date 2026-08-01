@@ -269,6 +269,12 @@ class OdooService:
                         professional_id = p.get("id")
                         break
 
+            # 6c. Validar que el profesional realmente ofrezca este servicio
+            if professional_id and service_id:
+                if not self.check_professional_specialty(professional_id, service_id):
+                    logger.warning(f"Odoo create_appointment: specialty check failed. {professional_name} does not offer {service_name}")
+                    return "SPECIALTY_INCOMPATIBLE"
+
             # 7. Crear evento en calendar.event con IDs relacionales y campos spa
             event_data = {
                 "name": event_name,
