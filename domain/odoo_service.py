@@ -499,12 +499,13 @@ class OdooService:
 
     def cancel_appointment_spa(self, cita_id: int = 0, phone: str = "") -> dict:
         """
-        Cancela una cita del cliente en Odoo llamando al endpoint POST /api/spa/cancelar.
-        Si falla, ejecuta el fallback cancel_appointment archivando el evento en Odoo.
+        Cancela una cita del cliente en Odoo llamando al endpoint POST /api/spa/cancelar,
+        y luego garantiza la eliminación física de la cita (unlink) en Odoo para liberar espacio.
         """
         if not self.url or not cita_id:
             return {"success": False, "message": "ID de cita inválido"}
         
+        # 1. Llamar al endpoint /api/spa/cancelar para disparar flujos internos primero
         clean_phone = (phone or "").replace("+", "").strip()
         url = f"{self.url}/api/spa/cancelar"
         payload = {
@@ -516,6 +517,7 @@ class OdooService:
                 "phone": clean_phone
             }
         }
+        
         try:
             response = httpx.post(
                 url,
@@ -525,22 +527,20 @@ class OdooService:
             )
             response.raise_for_status()
             data = response.json()
-            if "error" in data:
-                logger.warning(f"Odoo /api/spa/cancelar devolvió error: {data['error']}. Ejecutando fallback ORM...")
-                ok = self.cancel_appointment(int(cita_id))
-                return {"success": ok, "message": "Tu cita ha sido cancelada correctamente." if ok else "No se pudo cancelar la cita."}
-            result = data.get("result", {})
-            if isinstance(result, dict) and result.get("success"):
-                return result
-            if isinstance(result, dict) and not result.get("success"):
-                logger.warning("Odoo /api/spa/cancelar success=False. Ejecutando fallback ORM...")
-                ok = self.cancel_appointment(int(cita_id))
-                return {"success": ok, "message": "Tu cita ha sido cancelada correctamente." if ok else "No se pudo cancelar la cita."}
-            return {"success": True, "message": "Tu cita ha sido cancelada correctamente."}
+            if "error" not in data:
+                result = data.get("result", {})
+                if isinstance(result, dict) and result.get("success"):
+                    logger.info(f"Odoo /api/spa/cancelar exitoso para cita {cita_id}")
         except Exception as e:
-            logger.error(f"Error cancelando cita en Odoo ({url}): {e}. Ejecutando fallback ORM...")
-            ok = self.cancel_appointment(int(cita_id))
-            return {"success": ok, "message": "Tu cita ha sido cancelada correctamente." if ok else "No se pudo cancelar la cita."}
+            logger.warning(f"Error llamando a /api/spa/cancelar: {e}")
+            
+        # 2. SIEMPRE garantizar la eliminación física (unlink) mediante el ORM
+        unlink_ok = self.cancel_appointment(int(cita_id))
+        
+        return {
+            "success": unlink_ok, 
+            "message": "Tu cita ha sido cancelada correctamente." if unlink_ok else "No se pudo cancelar la cita."
+        }
 
     def get_available_slots(self, date_str: str, professional_id: int = None, service_id: int = None) -> list:
         """
