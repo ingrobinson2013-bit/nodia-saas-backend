@@ -66,7 +66,7 @@ app.include_router(campaigns_router, prefix="/api", tags=["WhatsApp Campaigns"])
 # ── Health check ──────────────────────────────────────────
 @app.get("/health", tags=["Sistema"])
 async def health():
-    return {"status": "ok", "service": "nodia-saas-backend", "version": "1.2.0"}
+    return {"status": "ok", "service": "nodia-saas-backend", "version": "1.2.1"}
 
 @app.get("/debug/openai", tags=["Sistema"])
 async def debug_openai():

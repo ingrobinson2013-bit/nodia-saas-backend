@@ -524,33 +524,43 @@ class OdooService:
 
     def get_available_slots(self, date_str: str, professional_id: int = None, service_id: int = None) -> list:
         """
-        Consulta slots disponibles llamando al endpoint GET /api/spa/slots.
+        Consulta slots disponibles llamando al endpoint POST /api/spa/slots (usando JSON-RPC 2.0).
         """
         if not self.url:
             return []
         url = f"{self.url}/api/spa/slots"
         params = {"date": date_str}
         if professional_id:
-            params["professional_id"] = professional_id
+            params["professional_id"] = int(professional_id)
         if service_id:
-            params["service_id"] = service_id
+            params["service_id"] = int(service_id)
+        
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "call",
+            "params": params
+        }
         
         try:
-            response = httpx.get(
+            response = httpx.post(
                 url,
-                params=params,
+                json=payload,
                 timeout=10.0,
                 headers={"Content-Type": "application/json"}
             )
             response.raise_for_status()
             data = response.json()
-            if isinstance(data, list):
-                return data
             if isinstance(data, dict):
-                return data.get("result", data.get("slots", []))
+                # Odoo JSON-RPC retorna {"result": {"success": True, "slots": [...]}} o similar
+                res = data.get("result")
+                if isinstance(res, dict):
+                    return res.get("slots", [])
+                elif isinstance(res, list):
+                    return res
+                return data.get("slots", [])
             return []
         except Exception as e:
-            logger.warning(f"No se pudo consultar /api/spa/slots ({url}): {e}")
+            logger.warning(f"No se pudo consultar /api/spa/slots ({url}) via JSON-RPC: {e}")
             return []
 
     def cancel_appointment(self, event_id: int) -> bool:
