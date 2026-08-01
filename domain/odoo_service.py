@@ -584,7 +584,8 @@ class OdooService:
             return []
 
     def cancel_appointment(self, event_id: int) -> bool:
-        """Elimina (unlink) por completo una cita en Odoo para liberar el espacio."""
+        """Elimina (unlink) por completo una cita en Odoo para liberar el espacio.
+        Si el registro ya no existe (MissingError), se considera éxito — ya fue eliminado."""
         if not self.uid or not event_id:
             return False
         try:
@@ -592,6 +593,12 @@ class OdooService:
             logger.info(f"Odoo: cita {event_id} eliminada por completo (unlink)")
             return True
         except Exception as e:
+            err_str = str(e)
+            # Si el registro ya no existe (lo eliminó el controlador /api/spa/cancelar antes),
+            # es un éxito: el objetivo era eliminarlo y ya está eliminado.
+            if "MissingError" in err_str or "Record does not exist" in err_str:
+                logger.info(f"Odoo: cita {event_id} ya no existe en Odoo (MissingError) — se considera cancelada exitosamente.")
+                return True
             logger.error(f"Error eliminando cita {event_id}: {e}")
             return False
 
