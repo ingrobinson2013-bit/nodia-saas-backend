@@ -324,13 +324,15 @@ class OdooService:
         return self._fallback_get_client_appointments(clean_phone)
 
     def find_service_id(self, service_name: str) -> int | None:
-        """Busca el ID relacional de un servicio en product.template mediante coincidencia difusa."""
+        """Busca el ID relacional de un servicio en product.template mediante coincidencia difusa inteligente."""
         if not self.uid or not service_name:
             return None
         try:
             import re
             clean = re.sub(r'[^a-zA-Z0-9\s]', '', service_name.lower()).strip()
-            words = [w for w in clean.split() if len(w) >= 3]
+            # Omitir conectores comunes para evitar coincidencias de ruido (ej: "y", "de")
+            stop_words = {"y", "de", "con", "para", "del", "el", "la", "los", "las", "un", "una", "unos", "unas"}
+            words = [w for w in clean.split() if len(w) >= 3 and w not in stop_words]
             
             prods = self._execute(
                 "product.template", "search_read",
@@ -338,18 +340,36 @@ class OdooService:
                 {"fields": ["id", "name"]}
             )
             
-            # 1. Coincidencia exacta o contenida
+            # 1. Coincidencia exacta o contenida (máxima prioridad)
             for p in prods or []:
                 p_norm = re.sub(r'[^a-zA-Z0-9\s]', '', p.get("name", "").lower()).strip()
-                if clean in p_norm or p_norm in clean:
+                p_norm_clean = " ".join(p_norm.split())
+                clean_norm = " ".join(clean.split())
+                if clean_norm == p_norm_clean or clean_norm in p_norm_clean or p_norm_clean in clean_norm:
                     return p["id"]
             
-            # 2. Coincidencia por palabras clave principales
+            # 2. Búsqueda por puntuación de coincidencia de palabras clave
+            best_prod_id = None
+            best_score = 0
+            
             for p in prods or []:
                 p_norm = re.sub(r'[^a-zA-Z0-9\s]', '', p.get("name", "").lower()).strip()
-                if words and any(w in p_norm for w in words):
-                    return p["id"]
-                    
+                p_words = set(p_norm.split())
+                
+                score = 0
+                for w in words:
+                    if w in p_words:
+                        score += 2  # coincidencia de palabra completa vale más
+                    elif any(w in pw or pw in w for pw in p_words):
+                        score += 1
+                
+                if score > best_score:
+                    best_score = score
+                    best_prod_id = p["id"]
+            
+            if best_score > 0:
+                return best_prod_id
+                
             return None
         except Exception as e:
             logger.warning(f"Odoo find_service_id error: {e}")
