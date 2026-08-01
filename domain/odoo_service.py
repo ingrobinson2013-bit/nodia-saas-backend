@@ -590,9 +590,9 @@ class OdooService:
 
     def check_availability(self, date_str: str) -> list:
         """
-        Devuelve los eventos del negocio para un día (en UTC).
+        Devuelve los eventos del negocio para un día (en UTC), añadiendo campos
+        en hora local de Bogotá (inicio_bogota, fin_bogota) para el Agente IA.
         date_str en formato YYYY-MM-DD (hora Bogotá).
-        Convierte el rango a UTC antes de consultar.
         """
         if not self.uid:
             return []
@@ -615,6 +615,41 @@ class OdooService:
                 for ev in events:
                     if self.professional_field_name in ev:
                         ev["professional_id"] = ev[self.professional_field_name]
+
+            # Agregar campos convertidos a Bogotá para simplificar la lectura de la IA
+            from datetime import datetime, timezone, timedelta
+            bogota_tz = timezone(timedelta(hours=-5))
+
+            for ev in events or []:
+                # 1. Obtener profesional_id y profesional_nombre
+                prof_val = ev.get(self.professional_field_name or "spa_professional_id")
+                prof_id = None
+                prof_name = "Cualquiera"
+                if isinstance(prof_val, (list, tuple)) and len(prof_val) == 2:
+                    prof_id = prof_val[0]
+                    prof_name = prof_val[1]
+                elif isinstance(prof_val, dict):
+                    prof_id = prof_val.get("id")
+                    prof_name = prof_val.get("name", "Cualquiera")
+
+                ev["profesional_id_int"] = prof_id
+                ev["profesional_nombre"] = prof_name
+
+                # 2. Convertir start y stop de UTC a Bogotá
+                start_str = ev.get("start", "")
+                stop_str = ev.get("stop", "")
+                if start_str:
+                    try:
+                        dt_utc = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                        ev["inicio_bogota"] = dt_utc.astimezone(bogota_tz).strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        ev["inicio_bogota"] = start_str[:16]
+                if stop_str:
+                    try:
+                        dt_utc = datetime.strptime(stop_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                        ev["fin_bogota"] = dt_utc.astimezone(bogota_tz).strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        ev["fin_bogota"] = stop_str[:16]
 
             return events or []
         except Exception as e:

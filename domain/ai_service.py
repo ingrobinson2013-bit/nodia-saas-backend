@@ -29,7 +29,7 @@ TOOL_CHECK_AVAILABILITY = {
         "description": (
             "Consulta las citas ocupadas en el calendario del negocio para una fecha específica. "
             "Llama esta función cuando el cliente proponga una fecha/hora para verificar disponibilidad. "
-            "Retorna lista de eventos con start/stop."
+            "Retorna lista de eventos con horas en Bogotá ('inicio_bogota' y 'fin_bogota') y el profesional asignado ('profesional_nombre')."
         ),
         "parameters": {
             "type": "object",
