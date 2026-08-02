@@ -501,19 +501,50 @@ class OdooService:
         """
         Cancela una cita del cliente en Odoo llamando al endpoint POST /api/spa/cancelar,
         y luego garantiza la eliminación física de la cita (unlink) en Odoo para liberar espacio.
+        Si cita_id es 0 o invalido, busca automáticamente las citas activas del cliente por su teléfono.
         """
-        if not self.url or not cita_id:
-            return {"success": False, "message": "ID de cita inválido"}
-        
-        # 1. Llamar al endpoint /api/spa/cancelar para disparar flujos internos primero
+        if not self.url:
+            return {"success": False, "message": "Servicio Odoo no configurado"}
+
         clean_phone = (phone or "").replace("+", "").strip()
+        
+        # Casteo seguro de cita_id (soporta enteros, strings como "75" o "cita_75")
+        cita_id_int = 0
+        try:
+            if isinstance(cita_id, str):
+                digits = "".join(c for c in str(cita_id) if c.isdigit())
+                cita_id_int = int(digits) if digits else 0
+            elif cita_id:
+                cita_id_int = int(cita_id)
+        except Exception:
+            cita_id_int = 0
+
+        # Si no hay cita_id específico pero hay teléfono, buscar y cancelar todas las citas activas del cliente
+        if not cita_id_int and clean_phone:
+            citas_res = self.get_client_appointments(clean_phone)
+            c_list = citas_res.get("citas", []) if isinstance(citas_res, dict) else []
+            if c_list:
+                cancelled_any = False
+                for c in c_list:
+                    cid = c.get("id")
+                    if cid:
+                        if self.cancel_appointment(int(cid)):
+                            cancelled_any = True
+                if cancelled_any:
+                    return {"success": True, "message": "Tus citas pendientes han sido canceladas correctamente."}
+            return {"success": False, "message": "No se encontraron citas activas asociadas a tu número para cancelar."}
+
+        if not cita_id_int:
+            return {"success": False, "message": "ID de cita inválido"}
+
+        # 1. Llamar al endpoint /api/spa/cancelar para disparar flujos internos en Odoo primero
         url = f"{self.url}/api/spa/cancelar"
         payload = {
             "jsonrpc": "2.0",
             "method": "call",
             "id": 1,
             "params": {
-                "cita_id": int(cita_id),
+                "cita_id": cita_id_int,
                 "phone": clean_phone
             }
         }
@@ -530,12 +561,12 @@ class OdooService:
             if "error" not in data:
                 result = data.get("result", {})
                 if isinstance(result, dict) and result.get("success"):
-                    logger.info(f"Odoo /api/spa/cancelar exitoso para cita {cita_id}")
+                    logger.info(f"Odoo /api/spa/cancelar exitoso para cita {cita_id_int}")
         except Exception as e:
             logger.warning(f"Error llamando a /api/spa/cancelar: {e}")
             
         # 2. SIEMPRE garantizar la eliminación física (unlink) mediante el ORM
-        unlink_ok = self.cancel_appointment(int(cita_id))
+        unlink_ok = self.cancel_appointment(cita_id_int)
         
         return {
             "success": unlink_ok, 

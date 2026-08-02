@@ -349,14 +349,15 @@ class MessageHandler:
                         for cita in cita_result.data:
                             eid = cita.get("odoo_event_id")
                             if eid:
-                                # Eliminar de Odoo (unlink)
-                                odoo.cancel_appointment(int(eid))
-                            # Marcar como cancelada en Supabase
+                                odoo.cancel_appointment_spa(cita_id=int(eid), phone=sender_wa_id)
                             db.table("citas_log").update({"estado": "cancelada"}).eq("id", cita["id"]).execute()
                             canceladas_ids.append(cita["id"])
-                        logger.info(f"[{tenant['nombre']}] Cita(s) cancelada(s): {canceladas_ids} — {sender_wa_id}")
+                        logger.info(f"[{tenant['nombre']}] Cita(s) cancelada(s) via citas_log: {canceladas_ids} — {sender_wa_id}")
                     else:
-                        logger.warning(f"CANCEL: no se encontro cita activa para {sender_wa_id} date={date_str} time={time_str}")
+                        # Fallback: eliminar directamente de Odoo por número de teléfono
+                        res_fallback = odoo.cancel_appointment_spa(phone=sender_wa_id)
+                        db.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id).execute()
+                        logger.info(f"[{tenant['nombre']}] CANCEL fallback directo en Odoo para {sender_wa_id} → {res_fallback}")
                 except Exception as e:
                     logger.error(f"Error procesando CANCEL: {e}")
 
