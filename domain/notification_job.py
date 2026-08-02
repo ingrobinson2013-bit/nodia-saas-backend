@@ -113,16 +113,18 @@ async def _process_tenant(tenant: dict):
         if not phone.startswith("57"):
             phone = f"57{phone[-10:]}"
 
-        # Verificar si ya notificamos este evento en Supabase
+        # Verificar si ya notificamos este evento a este teléfono (deduplicacion GLOBAL)
+        # — evita doble envío cuando dos tenants comparten el mismo Odoo
         try:
             ya_notificado = (
                 db.table("notificaciones_wa")
                 .select("id")
-                .eq("tenant_id", tenant_id)
                 .eq("odoo_event_id", str(event_id))
+                .eq("phone", phone)
                 .execute()
             )
             if ya_notificado.data:
+                logger.info(f"NotificationJob [{nombre}]: event {event_id} ya notificado a {phone} por otro tenant, skip")
                 continue
         except Exception:
             pass  # Si la tabla no existe aun, continuamos
@@ -149,8 +151,8 @@ async def _process_tenant(tenant: dict):
                 ]
                 await wa.send_template(
                     to=phone,
-                    template_name="cita_confirmada",
-                    lang="es",
+                    template_name="confirmacion_cita",
+                    lang="es_CO",
                     components=components,
                 )
                 logger.info(f"NotificationJob [{nombre}]: Template WA enviado a {phone} evento {event_id}")
