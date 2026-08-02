@@ -60,5 +60,5 @@ class TenantRepository:
             .execute()
         )
         tenants = result.data or []
-        # Filtrar: solo tenants con notificaciones_citas=True (o columna no existe aún = default True)
-        return [t for t in tenants if t.get("notificaciones_citas", True) is not False]
+        # Excluir tenants con odoo_url vacío (columna NOT NULL pero seteada a "")
+        return [t for t in tenants if t.get("notificaciones_citas", True) is not False and t.get("odoo_url", "").strip()]
