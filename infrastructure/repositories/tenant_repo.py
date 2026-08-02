@@ -11,7 +11,10 @@ class TenantRepository:
     Schema:
         tenant_id, nombre, wa_phone_id, wa_access_token,
         odoo_url, odoo_db, odoo_user, odoo_api_key,
-        activo, plan, created_at
+        activo, plan, created_at,
+        notificaciones_citas (bool, default=True)
+            — False en tenants de ventas/leads que no deben
+              recibir notificaciones automáticas de citas Odoo.
     """
 
     def get_by_phone_id(self, wa_phone_id: str) -> Optional[dict]:
@@ -43,7 +46,8 @@ class TenantRepository:
 
     def get_all_active_with_odoo(self) -> list:
         """
-        Devuelve todos los tenants activos que tienen Odoo configurado.
+        Devuelve tenants activos con Odoo configurado Y notificaciones_citas habilitadas.
+        Excluye tenants de tipo ventas/leads (notificaciones_citas=False).
         Usado por el notification_job para el polling multi-tenant.
         """
         db = get_supabase()
@@ -55,4 +59,6 @@ class TenantRepository:
             .not_.is_("odoo_api_key", "null")
             .execute()
         )
-        return result.data or []
+        tenants = result.data or []
+        # Filtrar: solo tenants con notificaciones_citas=True (o columna no existe aún = default True)
+        return [t for t in tenants if t.get("notificaciones_citas", True) is not False]
