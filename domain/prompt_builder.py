@@ -79,16 +79,13 @@ def build_system_prompt(tenant: dict, tenant_config: dict,
     negocio_promo     = tenant_config.get("promo_texto", "") if tenant_config else ""
     negocio_direccion = tenant_config.get("direccion", "Consultar direccion con el negocio") if tenant_config else ""
     negocio_horario   = tenant_config.get("horario", "Lun-Sab 9am-8pm, Dom 10am-6pm") if tenant_config else ""
-    negocio_servicios_raw = tenant_config.get("servicios_texto", "") if tenant_config else ""
+    negocio_servicios_raw = (tenant_config.get("servicios_texto", "") if tenant_config else "") or ""
 
-    # Si no hay servicios_texto configurado, construirlos desde la lista de profesionales
-    if negocio_servicios_raw and negocio_servicios_raw.strip():
-        negocio_servicios = negocio_servicios_raw
-    elif profesionales:
-        # Generar lista de servicios a partir de los profesionales (ya vienen de Odoo)
+    # REGLA: Si hay profesionales de Odoo -> SIEMPRE usar su catalogo (fuente de verdad)
+    # Si NO hay Odoo -> usar servicios_texto manual como fallback
+    if profesionales:
         servicios_por_prof = []
         for linea in profesionales:
-            # linea = "- Carlos Mendez (ofrece: Afeitado Clásico, Corte + Barba, ...)"
             if "ofrece:" in linea:
                 partes = linea.split("ofrece:")
                 if len(partes) == 2:
@@ -97,9 +94,11 @@ def build_system_prompt(tenant: dict, tenant_config: dict,
                     for sp in specs:
                         if sp:
                             servicios_por_prof.append(f"  - {sp} (con {prof_name})")
-        negocio_servicios = "\n".join(servicios_por_prof) if servicios_por_prof else "Consultar servicios disponibles"
+        negocio_servicios = "\n".join(servicios_por_prof) if servicios_por_prof else negocio_servicios_raw or "Consultar servicios disponibles"
+        precios_ref = negocio_servicios_raw.strip()
     else:
-        negocio_servicios = "Consultar servicios disponibles"
+        negocio_servicios = negocio_servicios_raw.strip() or "Consultar servicios disponibles"
+        precios_ref = ""
     promo_texto = negocio_promo or "10% de descuento especial"
 
     # Citas formateadas desde Supabase
@@ -125,8 +124,9 @@ Direccion: {negocio_direccion}
 Horario: {negocio_horario}
 Sucursal ID: {tenant_id}
 
-Servicios con precios:
+Servicios disponibles (por profesional):
 {negocio_servicios}
+{(chr(10) + 'Precios de referencia:' + chr(10) + precios_ref) if precios_ref else ''}
 
 Profesionales Disponibles:
 {chr(10).join(profesionales) if profesionales else "Cualquiera"}
