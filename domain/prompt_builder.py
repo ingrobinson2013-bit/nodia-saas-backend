@@ -79,8 +79,28 @@ def build_system_prompt(tenant: dict, tenant_config: dict,
     negocio_promo     = tenant_config.get("promo_texto", "") if tenant_config else ""
     negocio_direccion = tenant_config.get("direccion", "Consultar direccion con el negocio") if tenant_config else ""
     negocio_horario   = tenant_config.get("horario", "Lun-Sab 9am-8pm, Dom 10am-6pm") if tenant_config else ""
-    negocio_servicios = tenant_config.get("servicios_texto", "Consultar servicios disponibles") if tenant_config else ""
-    promo_texto       = negocio_promo or "10% de descuento especial"
+    negocio_servicios_raw = tenant_config.get("servicios_texto", "") if tenant_config else ""
+
+    # Si no hay servicios_texto configurado, construirlos desde la lista de profesionales
+    if negocio_servicios_raw and negocio_servicios_raw.strip():
+        negocio_servicios = negocio_servicios_raw
+    elif profesionales:
+        # Generar lista de servicios a partir de los profesionales (ya vienen de Odoo)
+        servicios_por_prof = []
+        for linea in profesionales:
+            # linea = "- Carlos Mendez (ofrece: Afeitado Clásico, Corte + Barba, ...)"
+            if "ofrece:" in linea:
+                partes = linea.split("ofrece:")
+                if len(partes) == 2:
+                    prof_name = partes[0].replace("-", "").replace("(", "").strip()
+                    specs = [s.strip() for s in partes[1].rstrip(")").split(",")]
+                    for sp in specs:
+                        if sp:
+                            servicios_por_prof.append(f"  - {sp} (con {prof_name})")
+        negocio_servicios = "\n".join(servicios_por_prof) if servicios_por_prof else "Consultar servicios disponibles"
+    else:
+        negocio_servicios = "Consultar servicios disponibles"
+    promo_texto = negocio_promo or "10% de descuento especial"
 
     # Citas formateadas desde Supabase
     citas_cliente_texto = _format_citas_cliente(citas_cliente)
@@ -109,7 +129,7 @@ Servicios con precios:
 {negocio_servicios}
 
 Profesionales Disponibles:
-{", ".join(profesionales) if profesionales else "Cualquiera"}
+{chr(10).join(profesionales) if profesionales else "Cualquiera"}
 
 ASI HABLA VALE (COLOMBIANO AUTENTICO)
 Saludos: "Quiubo!", "Hola, buenas!", "Hola! Como estas?"
