@@ -692,6 +692,19 @@ class AIService:
                     )
                     final_text = second.choices[0].message.content.strip()
 
+                    # Sanitizador de reprogramación: Si el texto afirma que 'Voy a reprogramar para X' sin tool call o con fechas pasadas/inventadas
+                    if any(k in final_text.lower() for k in ["reprogramar", "reagendar"]):
+                        if not any(tc.function.name == "reschedule_appointment" for tc in response_message.tool_calls):
+                            import re
+                            if re.search(r"voy a (?:reprogramar|reagendar) (?:esa cita|tu cita) para", final_text, re.IGNORECASE):
+                                logger.warning(f"⚠️ GPT prometió reprogramación en texto sin haber llamado reschedule_appointment. Sanitizando respuesta...")
+                                final_text = re.sub(
+                                    r"voy a (?:reprogramar|reagendar) (?:esa cita|tu cita) para.*",
+                                    "¿A qué nueva fecha y hora futura te gustaría reprogramarla? 😊",
+                                    final_text,
+                                    flags=re.IGNORECASE
+                                )
+
                     # Safety check ampliado: Si el texto menciona cancelación pero no se llamó cancel_appointment
                     cancellation_keywords = ["cancel", "anular", "eliminar", "borrar"]
                     if any(k in final_text.lower() for k in cancellation_keywords) and not any(tc.function.name == "cancel_appointment" for tc in response_message.tool_calls):
@@ -717,6 +730,19 @@ class AIService:
                     return final_text, booking_data
 
                 final_text = response_message.content.strip() if response_message.content else ""
+                
+                # Sanitizador de reprogramación sin tool calls
+                if any(k in final_text.lower() for k in ["reprogramar", "reagendar"]):
+                    import re
+                    if re.search(r"voy a (?:reprogramar|reagendar) (?:esa cita|tu cita) para", final_text, re.IGNORECASE):
+                        logger.warning(f"⚠️ GPT prometió reprogramación en texto sin haber llamado reschedule_appointment. Sanitizando respuesta...")
+                        final_text = re.sub(
+                            r"voy a (?:reprogramar|reagendar) (?:esa cita|tu cita) para.*",
+                            "¿A qué nueva fecha y hora futura te gustaría reprogramarla? 😊",
+                            final_text,
+                            flags=re.IGNORECASE
+                        )
+
                 cancellation_keywords = ["cancel", "anular", "eliminar", "borrar"]
                 if any(k in final_text.lower() for k in cancellation_keywords) and sender_wa_id:
                     logger.warning(f"⚠️ GPT mencionó/afirmó cancelación sin tool calls. Ejecutando cancelación de seguridad para {sender_wa_id}...")
