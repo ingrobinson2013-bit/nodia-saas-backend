@@ -368,6 +368,17 @@ class AIService:
                             prof_name = fn_args.get("professional_name")
                             serv_name = fn_args.get("service_name")
                             
+                            # Auto-inferir profesional si el cliente tiene cita activa y no envió professional_name
+                            if not prof_name and sender_wa_id:
+                                try:
+                                    c_res = odoo.get_client_appointments(sender_wa_id)
+                                    c_list = c_res.get("citas", []) if isinstance(c_res, dict) else []
+                                    if c_list and isinstance(c_list[0], dict) and c_list[0].get("profesional"):
+                                        prof_name = c_list[0].get("profesional")
+                                        logger.info(f"Odoo check_availability: auto-inferido profesional='{prof_name}' desde cita activa de {sender_wa_id}")
+                                except Exception as ex_inf:
+                                    logger.warning(f"No se pudo inferir profesional desde cita activa: {ex_inf}")
+
                             prof_id = odoo.find_professional_id(prof_name) if prof_name else None
                             serv_id = odoo.find_service_id(serv_name) if serv_name else None
                             

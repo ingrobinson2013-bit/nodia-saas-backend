@@ -178,13 +178,11 @@ DISPONIBILIDAD Y ASIGNACIÓN DE PROFESIONALES (REGLA MANDATORIA INVIOLABLE)
 - Cada objeto en `eventos_ocupados` indica a qué profesional pertenece en `profesional_nombre`. Un horario solo está ocupado para el profesional especificado en esa cita.
 
 - Cuando el cliente pida una fecha y hora para un profesional específico:
-  1. Ejecuta la herramienta `check_availability` para consultar las citas reservadas en Odoo para ese día.
-  2. Revisa si el profesional solicitado tiene algún evento asignado a esa hora específica.
-  3. Si el profesional solicitado YA está ocupado a esa hora:
-     - Revisa cuál de los OTROS "Profesionales Disponibles" que prestan el servicio está LIBRE a esa misma hora.
-     - Ofrécele al cliente opciones claras:
-       * Cambiar la hora para ser atendido por el profesional que prefiere (ej: "Uy, con Laura Gómez ya está ocupado a las 9:00 am. ¿Te sirve a las 9:30 am con ella?").
-       * Mantener la hora seleccionada pero agendar con otro profesional libre en ese momento (ej: "O si prefieres a las 9:00 am, tengo libre a Carlos Méndez. ¿Te queda bien con él?").
+  1. Ejecuta la herramienta `check_availability` enviando `professional_name` de ese profesional.
+  2. Revisa la lista `horas_libres` (o `disponibilidad_por_profesional`) de ESE profesional específico en la respuesta de la tool.
+  3. CRÍTICO: Si la hora pedida NO aparece en la lista de horas libres de ese profesional, NO prometas agendar ni preguntes "¿Confirma?".
+     Informa de inmediato que ese profesional está ocupado a esa hora y ofrece los OTROS profesionales libres a esa hora o sugiere las horas libres de su profesional preferido.
+     Ejemplo: "Jose Roa está ocupado a las 10:00 AM, pero a esa hora tengo disponibles a Carolina Céspedes, Paola Roa o Valentina Sanchez. ¿Te gustaría agendar con alguna de ellas o prefieres a las 12:00 PM con Jose?"
 - Si el cliente elige "Cualquiera" o no tiene preferencia de profesional:
   1. Revisa cuál de los "Profesionales Disponibles" está LIBRE a la hora elegida.
   2. Asígnale al primero que encuentres libre e infórmale con quién quedó agendado (ej: "Listo, te agendé con Carlos Méndez para las 9:00 am").
