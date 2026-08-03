@@ -395,14 +395,40 @@ class AIService:
                                 }, ensure_ascii=False)
                             else:
                                 result = odoo.check_availability(date_str, professional_id=prof_id)
-                                slots = odoo.get_available_slots(date_str, professional_id=prof_id, service_id=serv_id)
                                 
+                                if prof_id:
+                                    raw_slots = odoo.get_available_slots(date_str, professional_id=prof_id, service_id=serv_id)
+                                    avail_times = [s.get("time") for s in raw_slots if isinstance(s, dict) and s.get("available")]
+                                    slots_info = {
+                                        "profesional": prof_name,
+                                        "professional_id": prof_id,
+                                        "horas_libres": avail_times
+                                    }
+                                else:
+                                    # Filtrar slots independientemente por CADA professional_id
+                                    profs_list = odoo.get_professionals()
+                                    slots_by_prof = {}
+                                    general_avail = set()
+                                    for p in profs_list:
+                                        p_id = p.get("id")
+                                        p_name = p.get("name")
+                                        if p_id and p_name:
+                                            p_slots = odoo.get_available_slots(date_str, professional_id=p_id, service_id=serv_id)
+                                            p_times = [s.get("time") for s in p_slots if isinstance(s, dict) and s.get("available")]
+                                            slots_by_prof[p_name] = p_times
+                                            general_avail.update(p_times)
+                                    
+                                    slots_info = {
+                                        "disponibilidad_por_profesional": slots_by_prof,
+                                        "horas_libres_generales": sorted(list(general_avail))
+                                    }
+
                                 tool_result = json.dumps({
                                     "success": True,
                                     "ofrece_servicio": True,
                                     "abierto": True,
                                     "eventos_ocupados": result, 
-                                    "slots_disponibles": slots,
+                                    "slots_disponibles": slots_info,
                                     "profesional_solicitado": {"nombre": prof_name, "id": prof_id} if prof_name else None,
                                     "servicio_solicitado": {"nombre": serv_name, "id": serv_id} if serv_name else None
                                 }, ensure_ascii=False)
