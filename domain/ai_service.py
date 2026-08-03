@@ -48,6 +48,8 @@ def is_within_schedule(date_str: str, time_str: str, horario_str: str, check_pas
     Verifica si una fecha y hora (Bogotá) está dentro del horario comercial y en el presente/futuro.
     Retorna (es_valido, mensaje_error)
     """
+    date_str = _clean_date(date_str)
+    time_str = _clean_time(time_str)
     if check_past:
         try:
             from datetime import datetime, timezone, timedelta
