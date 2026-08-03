@@ -226,8 +226,28 @@ class OdooService:
                 logger.warning(f"Odoo: Intento de agendar en fecha/hora pasada ({date_str} {time_str}). Rechazado.")
                 return "PAST_DATE_TIME"
 
-            # 1. Calcular duración real del servicio
-            dur_min = _duration_from_service(service_name, negocio_servicios)
+            # 1. Buscar ID del servicio en product.template mediante coincidencia difusa primero
+            service_id = self.find_service_id(service_name)
+
+            # 1b. Calcular duración real del servicio (priorizando spa_duration de Odoo)
+            dur_min = 30
+            if service_id:
+                try:
+                    prod = self._execute(
+                        "product.template", "read",
+                        [[service_id], ["spa_duration"]]
+                    )
+                    if prod and isinstance(prod, list) and len(prod) >= 1:
+                        spa_dur = prod[0].get("spa_duration")
+                        if spa_dur:
+                            dur_min = int(float(spa_dur) * 60)
+                            logger.info(f"Odoo: Duración del servicio '{service_name}' extraída de Odoo: {dur_min} min")
+                except Exception as ex_dur:
+                    logger.warning(f"Error obteniendo duración de Odoo para servicio {service_id}: {ex_dur}")
+
+            if not service_id or dur_min == 30:
+                dur_min = _duration_from_service(service_name, negocio_servicios)
+
             dur_hours = dur_min / 60.0
 
             # 2. Calcular hora de fin en Bogotá
@@ -254,9 +274,6 @@ class OdooService:
             )
             if description:
                 desc_full += f"\n{description}"
-
-            # 6. Buscar ID del servicio en product.template mediante coincidencia difusa
-            service_id = self.find_service_id(service_name)
 
             # 6b. Buscar ID del profesional en hr.employee
             professional_id = None
@@ -659,6 +676,17 @@ class OdooService:
             if fecha_hora_cita_bogota <= ahora_bogota:
                 logger.warning(f"Odoo: Intento de reagendar en fecha/hora pasada ({date_str} {time_str}). Rechazado.")
                 return False
+
+            # Intentar obtener la duración real del evento en Odoo para preservar su duración original
+            try:
+                ev_data = self._execute("calendar.event", "read", [[event_id], ["duration"]])
+                if ev_data and isinstance(ev_data, list) and len(ev_data) >= 1:
+                    dur_val = ev_data[0].get("duration")
+                    if dur_val:
+                        dur_min = int(float(dur_val) * 60)
+                        logger.info(f"Odoo reschedule_appointment: obtenida duración de cita {event_id} desde Odoo: {dur_min} min")
+            except Exception as ev_ex:
+                logger.warning(f"Odoo reschedule_appointment: no se pudo leer la duración actual de la cita {event_id}: {ev_ex}")
 
             total_min = h * 60 + m + dur_min
             stop_h = str(total_min // 60).zfill(2)
