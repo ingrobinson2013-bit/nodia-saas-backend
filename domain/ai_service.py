@@ -12,7 +12,36 @@ from config import settings
 import logging
 import json
 
-logger = logging.getLogger(__name__)
+import re
+
+def _clean_time(t_str: str) -> str:
+    """Normaliza cualquier string de hora (ej: '10:00 AM', '6:00 PM', '10:00:00', '10:30') a formato HH:MM (24h)."""
+    if not t_str:
+        return "00:00"
+    t_clean = str(t_str).upper().strip()
+    m = re.search(r"(\d{1,2}):(\d{2})", t_clean)
+    if not m:
+        return "00:00"
+    h = int(m.group(1))
+    mins = int(m.group(2))
+    if "PM" in t_clean and h < 12:
+        h += 12
+    elif "AM" in t_clean and h == 12:
+        h = 0
+    return f"{str(h).zfill(2)}:{str(mins).zfill(2)}"
+
+def _clean_date(d_str: str) -> str:
+    """Normaliza un string de fecha a formato YYYY-MM-DD."""
+    if not d_str:
+        return ""
+    d_str = str(d_str).strip()
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", d_str)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m2 = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", d_str)
+    if m2:
+        return f"{m2.group(3)}-{str(m2.group(2)).zfill(2)}-{str(m2.group(1)).zfill(2)}"
+    return d_str[:10]
 
 def is_within_schedule(date_str: str, time_str: str, horario_str: str, check_past: bool = True) -> tuple[bool, str]:
     """
@@ -478,8 +507,8 @@ class AIService:
 
                         elif fn_name == "reschedule_appointment":
                             cita_id_raw = fn_args.get("cita_id")
-                            nueva_fecha = fn_args.get("nueva_fecha", "")
-                            nueva_hora  = fn_args.get("nueva_hora", "")
+                            nueva_fecha = _clean_date(fn_args.get("nueva_fecha", ""))
+                            nueva_hora  = _clean_time(fn_args.get("nueva_hora", ""))
 
                             # Parseo seguro de cita_id (int/str)
                             cita_id = None
@@ -610,8 +639,8 @@ class AIService:
                                     }, ensure_ascii=False)
 
                         elif fn_name == "create_appointment":
-                            fecha_req = fn_args.get("fecha", "")
-                            hora_req = fn_args.get("hora", "00:00")
+                            fecha_req = _clean_date(fn_args.get("fecha", ""))
+                            hora_req = _clean_time(fn_args.get("hora", "00:00"))
 
                             # 0. Validar si la fecha/hora está dentro del horario comercial
                             if horario_comercial:
@@ -624,6 +653,26 @@ class AIService:
                                     }, ensure_ascii=False)
                                     logger.info(f"Odoo create_appointment: horario no permitido → {fecha_req} {hora_req}")
                                     continue
+
+                            # Auto-cancelar citas anteriores activas si el usuario está agendando de nuevo o cambiando
+                            if sender_wa_id:
+                                try:
+                                    prev_res = odoo.get_client_appointments(sender_wa_id)
+                                    prev_list = prev_res.get("citas", []) if isinstance(prev_res, dict) else []
+                                    for old_c in prev_list:
+                                        old_id = old_c.get("id")
+                                        if old_id:
+                                            logger.info(f"Odoo: eliminando cita previa {old_id} de {sender_wa_id} al crear nueva cita...")
+                                            odoo.cancel_appointment_spa(old_id, sender_wa_id)
+                                            if tenant_id:
+                                                try:
+                                                    from infrastructure.repositories.tenant_repo import get_supabase_client
+                                                    sb = get_supabase_client()
+                                                    sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("odoo_event_id", int(old_id)).execute()
+                                                except Exception:
+                                                    pass
+                                except Exception as ex_dup:
+                                    logger.warning(f"Error cancelando cita previa en create_appointment: {ex_dup}")
 
                             # ✅ Crear la cita en Odoo directamente desde ai_service
                             event_id = odoo.create_appointment(
