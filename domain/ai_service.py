@@ -492,7 +492,31 @@ class AIService:
                             except Exception:
                                 cita_id = None
 
-                            # 0. Validar si la nueva fecha/hora está dentro del horario comercial
+                            # 0. Validar si la nueva fecha/hora ya pasó en Bogotá
+                            try:
+                                from zoneinfo import ZoneInfo
+                                bogota_tz = ZoneInfo("America/Bogota")
+                            except ImportError:
+                                from datetime import timezone, timedelta
+                                bogota_tz = timezone(timedelta(hours=-5))
+
+                            ahora_bogota = datetime.now(bogota_tz)
+                            try:
+                                y, mo, d = map(int, nueva_fecha.split("-"))
+                                h, m = map(int, nueva_hora.split(":"))
+                                fecha_hora_resched = datetime(y, mo, d, h, m, tzinfo=bogota_tz)
+                                if fecha_hora_resched <= ahora_bogota:
+                                    tool_result = json.dumps({
+                                        "success": False,
+                                        "error_code": "PAST_DATE_TIME",
+                                        "message": f"No es posible reprogramar una cita a una fecha u hora que ya pasó ({nueva_fecha} {nueva_hora}). Por favor elige una fecha y hora futura."
+                                    }, ensure_ascii=False)
+                                    logger.info(f"Odoo reschedule_appointment: intento de reagendar en fecha/hora pasada → {nueva_fecha} {nueva_hora}")
+                                    continue
+                            except Exception as ex_p:
+                                logger.warning(f"Error validando fecha pasada en reschedule: {ex_p}")
+
+                            # 0b. Validar si la nueva fecha/hora está dentro del horario comercial
                             if horario_comercial:
                                 ok_sch, err_sch = is_within_schedule(nueva_fecha, nueva_hora, horario_comercial)
                                 if not ok_sch:

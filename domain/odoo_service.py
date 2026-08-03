@@ -643,7 +643,23 @@ class OdooService:
         if not self.uid or not event_id:
             return False
         try:
+            # Validar que la nueva fecha y hora sea futura en Bogotá
+            try:
+                from zoneinfo import ZoneInfo
+                bogota_tz = ZoneInfo("America/Bogota")
+            except ImportError:
+                from datetime import timezone, timedelta
+                bogota_tz = timezone(timedelta(hours=-5))
+
+            ahora_bogota = datetime.now(bogota_tz)
+            y, mo, d = map(int, date_str.split("-"))
             h, m = map(int, time_str.split(":"))
+            fecha_hora_cita_bogota = datetime(y, mo, d, h, m, tzinfo=bogota_tz)
+
+            if fecha_hora_cita_bogota <= ahora_bogota:
+                logger.warning(f"Odoo: Intento de reagendar en fecha/hora pasada ({date_str} {time_str}). Rechazado.")
+                return False
+
             total_min = h * 60 + m + dur_min
             stop_h = str(total_min // 60).zfill(2)
             stop_m = str(total_min % 60).zfill(2)
