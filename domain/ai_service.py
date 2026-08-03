@@ -227,8 +227,11 @@ TOOL_CANCEL_APPOINTMENT = {
     "function": {
         "name": "cancel_appointment",
         "description": (
-            "Cancela una cita específica del cliente en Odoo mediante el ID numérico de la cita (cita_id). "
-            "Llama esta función cuando el cliente pida cancelar una cita específica o seleccione la cita a cancelar."
+            "DEBES ejecutar esta herramienta OBLIGATORIAMENTE en el mismo instante en que el cliente "
+            "pida cancelar una cita o indique cuál desea cancelar. "
+            "NUNCA respondas en texto diciendo que vas a proceder a cancelar o que la cita fue cancelada sin incluir "
+            "la llamada a esta herramienta en la misma respuesta. "
+            "Recibe cita_id (ID numérico de la cita en Odoo)."
         ),
         "parameters": {
             "type": "object",
@@ -602,9 +605,10 @@ class AIService:
                     )
                     final_text = second.choices[0].message.content.strip()
 
-                    # Safety check: Si el texto afirma cancelación pero no se llamó cancel_appointment
-                    if "cancelada" in final_text.lower() and not any(tc.function.name == "cancel_appointment" for tc in response_message.tool_calls):
-                        logger.warning(f"⚠️ GPT afirmó cancelación en texto sin haber llamado la tool cancel_appointment. Ejecutando cancelación de seguridad para {sender_wa_id}...")
+                    # Safety check ampliado: Si el texto menciona cancelación pero no se llamó cancel_appointment
+                    cancellation_keywords = ["cancel", "anular", "eliminar", "borrar"]
+                    if any(k in final_text.lower() for k in cancellation_keywords) and not any(tc.function.name == "cancel_appointment" for tc in response_message.tool_calls):
+                        logger.warning(f"⚠️ GPT mencionó/afirmó cancelación en texto sin haber llamado cancel_appointment. Ejecutando cancelación de seguridad para {sender_wa_id}...")
                         try:
                             citas_res = odoo.get_client_appointments(sender_wa_id or "")
                             c_list = citas_res.get("citas", []) if isinstance(citas_res, dict) else []
@@ -626,8 +630,9 @@ class AIService:
                     return final_text, booking_data
 
                 final_text = response_message.content.strip() if response_message.content else ""
-                if "cancelada" in final_text.lower() and sender_wa_id:
-                    logger.warning(f"⚠️ GPT afirmó cancelación sin tool calls. Ejecutando cancelación de seguridad para {sender_wa_id}...")
+                cancellation_keywords = ["cancel", "anular", "eliminar", "borrar"]
+                if any(k in final_text.lower() for k in cancellation_keywords) and sender_wa_id:
+                    logger.warning(f"⚠️ GPT mencionó/afirmó cancelación sin tool calls. Ejecutando cancelación de seguridad para {sender_wa_id}...")
                     try:
                         citas_res = odoo.get_client_appointments(sender_wa_id or "")
                         c_list = citas_res.get("citas", []) if isinstance(citas_res, dict) else []

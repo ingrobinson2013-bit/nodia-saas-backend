@@ -209,9 +209,9 @@ REGLA MANDATORIA INVIOLABLE:
    Responde: "No encontré citas pendientes con tu número. Si agendaste con un número diferente, ingresa a: {tenant.get('odoo_url', 'el sitio del negocio')}/cancelar-cita"
 3. Si el cliente tiene 1 o más citas:
    Muéstrale los detalles de la cita con ID, Servicio, Profesional, Fecha y Hora, y pregúntale cuál desea cancelar.
-4. Cuando el cliente confirme la cancelación (diciendo "sí", "confirmar", "👍", "👍🏻", "ok", "cancelar"):
-   DEBES LLAMAR INMEDIATAMENTE A LA TOOL `cancel_appointment` con el `cita_id` numérico de la cita.
-   CRÍTICO: NUNCA respondas "Tu cita ha sido cancelada" en texto sin haber llamado primero a la tool `cancel_appointment`. Es obligatorio ejecutar la herramienta para borrarla del calendario de Odoo.
+4. Cuando el cliente confirme la cancelación (diciendo "sí", "confirmar", "👍", "👍🏻", "ok", "cancelar") o indique cuál cita desea cancelar:
+   DEBES LLAMAR INMEDIATAMENTE A LA TOOL `cancel_appointment` pasando el `cita_id` numérico de la cita.
+   CRÍTICO: NUNCA respondas frases intermedias como "Voy a proceder a cancelar... un momento por favor" o "Tu cita ha sido cancelada" sin ejecutar la tool `cancel_appointment` en esa misma respuesta. La ejecución de la herramienta es OBLIGATORIA para borrar el evento de Odoo.
 5. Si la cancelación en Odoo falla (success == false):
    Responde: "No pude procesar la cancelación. Por favor ingresa a: {tenant.get('odoo_url', 'el sitio del negocio')}/cancelar-cita o escríbenos directamente para ayudarte."
 
