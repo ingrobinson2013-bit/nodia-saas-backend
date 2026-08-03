@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="NODIA WhatsApp AI SaaS",
     description="Backend multi-tenant para agentes IA en WhatsApp",
-    version="1.0.1",
+    version="1.4.0",
     docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
     lifespan=lifespan,
 )
@@ -66,7 +66,7 @@ app.include_router(campaigns_router, prefix="/api", tags=["WhatsApp Campaigns"])
 # ── Health check ──────────────────────────────────────────
 @app.get("/health", tags=["Sistema"])
 async def health():
-    return {"status": "ok", "service": "nodia-saas-backend", "version": "1.3.1"}
+    return {"status": "ok", "service": "nodia-saas-backend", "version": "1.4.0"}
 
 @app.get("/debug/openai", tags=["Sistema"])
 async def debug_openai():
