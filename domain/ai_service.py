@@ -466,9 +466,20 @@ class AIService:
                             logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
 
                         elif fn_name == "reschedule_appointment":
-                            cita_id     = fn_args.get("cita_id")
+                            cita_id_raw = fn_args.get("cita_id")
                             nueva_fecha = fn_args.get("nueva_fecha", "")
                             nueva_hora  = fn_args.get("nueva_hora", "")
+
+                            # Parseo seguro de cita_id (int/str)
+                            cita_id = None
+                            try:
+                                if isinstance(cita_id_raw, str):
+                                    digits = "".join(c for c in cita_id_raw if c.isdigit())
+                                    cita_id = int(digits) if digits else None
+                                elif cita_id_raw:
+                                    cita_id = int(cita_id_raw)
+                            except Exception:
+                                cita_id = None
 
                             # 0. Validar si la nueva fecha/hora está dentro del horario comercial
                             if horario_comercial:
@@ -484,7 +495,16 @@ class AIService:
                             # 1. Obtener la cita actual para saber el profesional asignado
                             citas_actuales = odoo.get_client_appointments(sender_wa_id or "")
                             c_list = citas_actuales.get("citas", []) if isinstance(citas_actuales, dict) else []
-                            cita_actual = next((c for c in c_list if c.get("id") == cita_id), None)
+                            
+                            # Coincidencia flexible por string para evitar descalce int vs str
+                            cita_actual = None
+                            if cita_id:
+                                cita_actual = next((c for c in c_list if str(c.get("id")) == str(cita_id)), None)
+                            if not cita_actual and c_list:
+                                cita_actual = c_list[0]
+                                if not cita_id and cita_actual:
+                                    cita_id = cita_actual.get("id")
+
                             profesional_id = cita_actual.get("profesional_id") if cita_actual else None
                             profesional_nombre = cita_actual.get("profesional", "el profesional") if cita_actual else "el profesional"
 
@@ -496,17 +516,17 @@ class AIService:
                             # Filtrar eventos del mismo profesional en el mismo horario UTC
                             def _mismo_prof(ev):
                                 if not profesional_id:
-                                    return True  # sin profesional específico, chequear cualquiera
+                                    return False  # sin profesional específico, no bloquear arbitrariamente
                                 pf = ev.get(odoo.professional_field_name or "spa_professional_id")
                                 if isinstance(pf, (list, tuple)) and len(pf) >= 1:
-                                    return pf[0] == profesional_id
+                                    return int(pf[0]) == int(profesional_id)
                                 if isinstance(pf, dict):
-                                    return pf.get("id") == profesional_id
+                                    return int(pf.get("id", 0)) == int(profesional_id)
                                 return False
 
                             ocupado = any(
                                 ev.get("start", "")[:16] == nueva_start_utc[:16]
-                                and ev.get("id") != cita_id
+                                and str(ev.get("id")) != str(cita_id)
                                 and _mismo_prof(ev)
                                 for ev in eventos_dia
                             )
@@ -517,6 +537,12 @@ class AIService:
                                     "message": f"Lo siento, {profesional_nombre} ya tiene una cita a las {nueva_hora} del {nueva_fecha}. Por favor elige otra hora."
                                 }, ensure_ascii=False)
                             else:
+                                if not cita_id:
+                                    tool_result = json.dumps({
+                                        "success": False,
+                                        "message": "No se pudo identificar la cita a reprogramar."
+                                    }, ensure_ascii=False)
+                                    continue
                                 ok = odoo.reschedule_appointment(int(cita_id), nueva_fecha, nueva_hora)
                                 if ok:
                                     # Sincronizar en Supabase citas_log
