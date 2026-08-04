@@ -845,6 +845,17 @@ class OdooService:
                 return _PROFESSIONALS_CACHE[cache_key]
 
         try:
+            # 0. Obtener la compañía y su calendario por defecto
+            company_cal_id = None
+            try:
+                companies = self._execute("res.company", "search_read", [], {"fields": ["id", "resource_calendar_id"]})
+                if companies and isinstance(companies, list):
+                    cal_val = companies[0].get("resource_calendar_id")
+                    if cal_val and isinstance(cal_val, list):
+                        company_cal_id = cal_val[0]
+            except Exception as e_comp:
+                logger.warning(f"Odoo get_professionals: no se pudo consultar res.company: {e_comp}")
+
             # 1. Obtener empleados activos, sus especialidades y su calendario de recursos
             try:
                 employees = self._execute(
@@ -913,30 +924,40 @@ class OdooService:
                 # Construir horario del profesional
                 cal_val = emp.get("resource_calendar_id")
                 schedule_parts = []
+                
+                is_standard = False
                 if cal_val and isinstance(cal_val, list):
                     cal_id = cal_val[0]
-                    emp_atts = att_map.get(cal_id, [])
-                    # Ordenar por día de la semana y hora de inicio
-                    emp_atts.sort(key=lambda x: (int(x.get("dayofweek", 0)), float(x.get("hour_from", 0))))
-                    
-                    # Agrupar por día para franjas múltiples
-                    by_day = {}
-                    for att in emp_atts:
-                        day = att.get("dayofweek")
-                        if day not in by_day:
-                            by_day[day] = []
-                        by_day[day].append(att)
+                    if cal_id == company_cal_id:
+                        is_standard = True
                         
-                    for day_num in sorted(by_day.keys(), key=int):
-                        day_lbl = day_names.get(day_num, day_num)
-                        ranges = []
-                        for att in by_day[day_num]:
-                            t_from = _format_attendance_hour(att.get("hour_from"))
-                            t_to = _format_attendance_hour(att.get("hour_to"))
-                            ranges.append(f"{t_from}-{t_to}")
-                        schedule_parts.append(f"{day_lbl} {', '.join(ranges)}")
-                
-                schedule_text = "; ".join(schedule_parts) if schedule_parts else "Lun-Sáb 8:00am-7:00pm"
+                if is_standard:
+                    schedule_text = "Lun-Sáb 8:00am-7:00pm"
+                else:
+                    if cal_val and isinstance(cal_val, list):
+                        cal_id = cal_val[0]
+                        emp_atts = att_map.get(cal_id, [])
+                        # Ordenar por día de la semana y hora de inicio
+                        emp_atts.sort(key=lambda x: (int(x.get("dayofweek", 0)), float(x.get("hour_from", 0))))
+                        
+                        # Agrupar por día para franjas múltiples
+                        by_day = {}
+                        for att in emp_atts:
+                            day = att.get("dayofweek")
+                            if day not in by_day:
+                                by_day[day] = []
+                            by_day[day].append(att)
+                            
+                        for day_num in sorted(by_day.keys(), key=int):
+                            day_lbl = day_names.get(day_num, day_num)
+                            ranges = []
+                            for att in by_day[day_num]:
+                                t_from = _format_attendance_hour(att.get("hour_from"))
+                                t_to = _format_attendance_hour(att.get("hour_to"))
+                                ranges.append(f"{t_from}-{t_to}")
+                            schedule_parts.append(f"{day_lbl} {', '.join(ranges)}")
+                    
+                    schedule_text = "; ".join(schedule_parts) if schedule_parts else "Lun-Sáb 8:00am-7:00pm"
                 
                 result.append({
                     "id": emp.get("id"),
