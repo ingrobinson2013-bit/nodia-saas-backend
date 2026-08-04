@@ -861,23 +861,23 @@ class OdooService:
                 employees = self._execute(
                     "hr.employee", "search_read",
                     [[["active", "=", True], ["is_spa_professional", "=", True]]],
-                    {"fields": ["id", "name", "spa_specialties", "resource_calendar_id"]}
+                    {"fields": ["id", "name", "spa_specialties", "resource_calendar_id", "spa_bio"]}
                 )
             except Exception as e_spa:
                 logger.warning(f"Odoo get_professionals: no se pudo filtrar por is_spa_professional, usando fallback: {e_spa}")
                 employees = self._execute(
                     "hr.employee", "search_read",
                     [[["active", "=", True]]],
-                    {"fields": ["id", "name", "spa_specialties", "resource_calendar_id"]}
+                    {"fields": ["id", "name", "spa_specialties", "resource_calendar_id", "spa_bio"]}
                 )
             
-            # 2. Obtener nombres de productos/servicios para mapear especialidades
+            # 2. Obtener nombres de productos/servicios para mapear especialidades con sus emojis
             prods = self._execute(
                 "product.template", "search_read",
                 [],
-                {"fields": ["id", "name"]}
+                {"fields": ["id", "name", "spa_emoji"]}
             )
-            prod_map = {p["id"]: p["name"] for p in prods or [] if p.get("id") and p.get("name")}
+            prod_map = {p["id"]: {"name": p["name"], "emoji": p.get("spa_emoji") or "💅"} for p in prods or [] if p.get("id") and p.get("name")}
             
             # 3. Obtener los horarios de atención (attendances) de los calendarios asociados
             calendar_ids = list(set(
@@ -916,7 +916,7 @@ class OdooService:
                 if emp_name.lower() in SKIP_NAMES:
                     continue
                 specialty_ids = emp.get("spa_specialties", []) or []
-                specialty_names = [prod_map[sid] for sid in specialty_ids if sid in prod_map]
+                specialty_names = [f"{prod_map[sid]['emoji']} {prod_map[sid]['name']}" for sid in specialty_ids if sid in prod_map]
                 # Excluir empleados sin ninguna especialidad asignada (no son profesionales activos)
                 if not specialty_names:
                     continue
@@ -963,7 +963,8 @@ class OdooService:
                     "id": emp.get("id"),
                     "name": emp_name,
                     "specialties": specialty_names,
-                    "schedule": schedule_text
+                    "schedule": schedule_text,
+                    "bio": emp.get("spa_bio") or ""
                 })
                 
             _PROFESSIONALS_CACHE[cache_key] = result

@@ -575,8 +575,8 @@ class AIService:
                                 cita_actual = next((c for c in c_list if str(c.get("id")) == str(cita_id)), None)
                             if not cita_actual and c_list:
                                 cita_actual = c_list[0]
-                                if not cita_id and cita_actual:
-                                    cita_id = cita_actual.get("id")
+                            if cita_actual:
+                                cita_id = cita_actual.get("id")
 
                             profesional_id = cita_actual.get("profesional_id") if cita_actual else None
                             profesional_nombre = cita_actual.get("profesional", "el profesional") if cita_actual else "el profesional"
