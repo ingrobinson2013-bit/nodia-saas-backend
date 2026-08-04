@@ -744,7 +744,6 @@ class AIService:
                     # Sanitizador de reprogramación: Si el texto afirma que 'Voy a reprogramar para X' sin tool call o con fechas pasadas/inventadas
                     if any(k in final_text.lower() for k in ["reprogramar", "reagendar"]):
                         if not any(tc.function.name == "reschedule_appointment" for tc in response_message.tool_calls):
-                            import re
                             if re.search(r"voy a (?:reprogramar|reagendar) (?:esa cita|tu cita) para", final_text, re.IGNORECASE):
                                 logger.warning(f"⚠️ GPT prometió reprogramación en texto sin haber llamado reschedule_appointment. Sanitizando respuesta...")
                                 final_text = re.sub(
@@ -789,7 +788,6 @@ class AIService:
                 
                 # Sanitizador de reprogramación sin tool calls
                 if any(k in final_text.lower() for k in ["reprogramar", "reagendar"]):
-                    import re
                     if re.search(r"voy a (?:reprogramar|reagendar) (?:esa cita|tu cita) para", final_text, re.IGNORECASE):
                         logger.warning(f"⚠️ GPT prometió reprogramación en texto sin haber llamado reschedule_appointment. Sanitizando respuesta...")
                         final_text = re.sub(
