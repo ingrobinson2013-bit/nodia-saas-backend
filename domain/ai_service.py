@@ -12,6 +12,8 @@ from config import settings
 import logging
 import json
 
+logger = logging.getLogger(__name__)
+
 import re
 
 def _clean_time(t_str: str) -> str:
