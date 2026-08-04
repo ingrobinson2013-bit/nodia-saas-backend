@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 from config import settings
 import logging
 import json
+from datetime import datetime
 import re
 from infrastructure.repositories.appointment_log_repo import AppointmentLogRepository
 from infrastructure.repositories.tenant_config_repo import TenantConfigRepository
@@ -753,10 +754,18 @@ class AIService:
                                     flags=re.IGNORECASE
                                 )
 
-                    # Safety check ampliado: Si el texto menciona cancelación pero no se llamó cancel_appointment
-                    cancellation_keywords = ["cancel", "anular", "eliminar", "borrar"]
-                    if any(k in final_text.lower() for k in cancellation_keywords) and not any(tc.function.name == "cancel_appointment" for tc in response_message.tool_calls):
-                        logger.warning(f"⚠️ GPT mencionó/afirmó cancelación en texto sin haber llamado cancel_appointment. Ejecutando cancelación de seguridad para {sender_wa_id}...")
+                    # Safety check ampliado: Si el texto afirma explícitamente haber cancelado la cita pero no se llamó a la tool de cancelación/reprogramación
+                    cancellation_patterns = [
+                        r"\bcita\s+(?:ha sido\s+)?(?:cancelada|anulada|eliminada|borrada)\b",
+                        r"\b(?:hemos|he|procedo a)\s+(?:cancelar|anular|eliminar|borrar)\s+(?:la|tu)\s+cita\b",
+                        r"\bcancelada\s+exitosamente\b",
+                        r"\banulada\s+exitosamente\b"
+                    ]
+                    has_cancel_pattern = any(re.search(pat, final_text, re.IGNORECASE) for pat in cancellation_patterns)
+                    has_any_call = any(tc.function.name in ["cancel_appointment", "reschedule_appointment"] for tc in response_message.tool_calls)
+
+                    if has_cancel_pattern and not has_any_call:
+                        logger.warning(f"⚠️ GPT afirmó cancelación en texto sin haber llamado cancel_appointment ni reschedule_appointment. Ejecutando cancelación de seguridad para {sender_wa_id}...")
                         try:
                             citas_res = odoo.get_client_appointments(sender_wa_id or "")
                             c_list = citas_res.get("citas", []) if isinstance(citas_res, dict) else []
@@ -790,9 +799,17 @@ class AIService:
                             flags=re.IGNORECASE
                         )
 
-                cancellation_keywords = ["cancel", "anular", "eliminar", "borrar"]
-                if any(k in final_text.lower() for k in cancellation_keywords) and sender_wa_id:
-                    logger.warning(f"⚠️ GPT mencionó/afirmó cancelación sin tool calls. Ejecutando cancelación de seguridad para {sender_wa_id}...")
+                # Safety check para respuesta de texto plano
+                cancellation_patterns = [
+                    r"\bcita\s+(?:ha sido\s+)?(?:cancelada|anulada|eliminada|borrada)\b",
+                    r"\b(?:hemos|he|procedo a)\s+(?:cancelar|anular|eliminar|borrar)\s+(?:la|tu)\s+cita\b",
+                    r"\bcancelada\s+exitosamente\b",
+                    r"\banulada\s+exitosamente\b"
+                ]
+                has_cancel_pattern = any(re.search(pat, final_text, re.IGNORECASE) for pat in cancellation_patterns)
+
+                if has_cancel_pattern and sender_wa_id:
+                    logger.warning(f"⚠️ GPT afirmó cancelación sin tool calls. Ejecutando cancelación de seguridad para {sender_wa_id}...")
                     try:
                         citas_res = odoo.get_client_appointments(sender_wa_id or "")
                         c_list = citas_res.get("citas", []) if isinstance(citas_res, dict) else []
