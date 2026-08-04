@@ -846,11 +846,19 @@ class OdooService:
 
         try:
             # 1. Obtener empleados activos, sus especialidades y su calendario de recursos
-            employees = self._execute(
-                "hr.employee", "search_read",
-                [[["active", "=", True]]],
-                {"fields": ["id", "name", "spa_specialties", "resource_calendar_id"]}
-            )
+            try:
+                employees = self._execute(
+                    "hr.employee", "search_read",
+                    [[["active", "=", True], ["is_spa_professional", "=", True]]],
+                    {"fields": ["id", "name", "spa_specialties", "resource_calendar_id"]}
+                )
+            except Exception as e_spa:
+                logger.warning(f"Odoo get_professionals: no se pudo filtrar por is_spa_professional, usando fallback: {e_spa}")
+                employees = self._execute(
+                    "hr.employee", "search_read",
+                    [[["active", "=", True]]],
+                    {"fields": ["id", "name", "spa_specialties", "resource_calendar_id"]}
+                )
             
             # 2. Obtener nombres de productos/servicios para mapear especialidades
             prods = self._execute(
