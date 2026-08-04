@@ -6,12 +6,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from infrastructure.repositories.tenant_repo import TenantRepository
 from domain.whatsapp_service import WhatsAppService
-from infrastructure.database import get_supabase
+from infrastructure.repositories.chat_session_repo import ChatSessionRepository
 from datetime import datetime, timezone
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 tenant_repo = TenantRepository()
+chat_session_repo = ChatSessionRepository()
+
 
 
 class SendMessageRequest(BaseModel):
@@ -46,20 +49,9 @@ async def send_message(req: SendMessageRequest):
         logger.error(f"Error enviando mensaje WhatsApp: {e}")
         raise HTTPException(status_code=500, detail=f"Error Meta API: {str(e)}")
 
-    # 3. Guardar en historial de la sesión
-    db = get_supabase()
-    session = db.table("chat_sessions").select("history").eq("id", req.session_id).single().execute()
-    if session.data:
-        history = session.data.get("history") or []
-        history.append({
-            "role": "agent",
-            "content": req.message,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
-        db.table("chat_sessions").update({
-            "history": history,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", req.session_id).execute()
+    # 3. Guardar en historial de la sesión usando el repositorio
+    chat_session_repo.append_message_to_history(req.session_id, "agent", req.message)
+
 
     logger.info(f"Agente envió mensaje a {req.wa_to}: {req.message[:50]}")
     return {"status": "sent", "to": req.wa_to}

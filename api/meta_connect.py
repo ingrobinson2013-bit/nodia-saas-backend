@@ -6,11 +6,14 @@ import httpx
 import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from infrastructure.database import get_supabase
+from infrastructure.repositories.tenant_repo import TenantRepository
+
 from config import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+tenant_repo = TenantRepository()
+
 
 GRAPH_URL = "https://graph.facebook.com/v19.0"
 
@@ -63,15 +66,14 @@ async def meta_connect(req: MetaConnectRequest):
         except (KeyError, IndexError) as e:
             logger.warning(f"No se pudo extraer phone_number_id o waba_id: {e}")
 
-        # ── 3. Guardar en tenants ──────────────────────────
-        db = get_supabase()
+        # ── 3. Guardar en tenants usando el repositorio ────
         update_data = {"wa_access_token": access_token}
         if phone_number_id:
             update_data["wa_phone_id"] = phone_number_id
         if waba_id:
             update_data["waba_id"] = waba_id
 
-        db.table("tenants").update(update_data).eq("tenant_id", req.tenant_id).execute()
+        tenant_repo.update_tenant_credentials(req.tenant_id, update_data)
 
         logger.info(f"Tenant {req.tenant_id} conectó WhatsApp: phone_id={phone_number_id} | waba_id={waba_id}")
         return {

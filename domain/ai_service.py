@@ -11,10 +11,16 @@ from openai import AsyncOpenAI
 from config import settings
 import logging
 import json
+import re
+from infrastructure.repositories.appointment_log_repo import AppointmentLogRepository
+from infrastructure.repositories.tenant_config_repo import TenantConfigRepository
 
 logger = logging.getLogger(__name__)
+appointment_log_repo = AppointmentLogRepository()
+tenant_config_repo = TenantConfigRepository()
 
-import re
+
+
 
 def _clean_time(t_str: str) -> str:
     """Normaliza cualquier string de hora (ej: '10:00 AM', '6:00 PM', '10:00:00', '10:30') a formato HH:MM (24h)."""
@@ -377,17 +383,16 @@ class AIService:
                         api_key=odoo_config["api_key"],
                     )
 
-                    # Cargar configuración del horario del negocio desde Supabase
+                    # Cargar configuración del horario del negocio desde Supabase usando el repositorio
                     horario_comercial = ""
                     if tenant_id:
                         try:
-                            from infrastructure.database import get_supabase
-                            sb = get_supabase()
-                            tc_res = sb.table("tenant_config").select("horario").eq("tenant_id", tenant_id).execute()
-                            if tc_res.data:
-                                horario_comercial = tc_res.data[0].get("horario", "")
+                            tc_res = tenant_config_repo.get_by_tenant_id(tenant_id)
+                            if tc_res:
+                                horario_comercial = tc_res.get("horario", "")
                         except Exception as tc_err:
                             logger.warning(f"No se pudo cargar el horario del tenant {tenant_id} en ai_service: {tc_err}")
+
 
                     messages.append(response_message)
                     booking_data = None  # resultado de create_appointment si aplica
@@ -493,18 +498,17 @@ class AIService:
                             if not isinstance(res, dict):
                                 res = {"success": True, "message": str(res)}
                             
-                            # ✅ Sincronizar cancelación en Supabase citas_log
+                            # ✅ Sincronizar cancelación en Supabase citas_log usando el repositorio
                             if res.get("success") and tenant_id:
                                 try:
-                                    from infrastructure.repositories.tenant_repo import get_supabase_client
-                                    sb = get_supabase_client()
                                     if cita_id:
-                                        sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("odoo_event_id", int(cita_id)).execute()
+                                        appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(cita_id))
                                     if sender_wa_id:
-                                        sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id).execute()
+                                        appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
                                     logger.info(f"Supabase citas_log sincronizado: estado='cancelada' para {sender_wa_id} cita_id={cita_id}")
                                 except Exception as se:
                                     logger.warning(f"No se pudo actualizar citas_log en Supabase al cancelar: {se}")
+
 
                             tool_result = json.dumps(res, ensure_ascii=False)
                             logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
@@ -616,21 +620,13 @@ class AIService:
                                     # Sincronizar en Supabase citas_log
                                     if tenant_id:
                                         try:
-                                            from infrastructure.repositories.tenant_repo import get_supabase_client
-                                            sb = get_supabase_client()
-                                            sb.table("citas_log").update({
-                                                "fecha_cita": nueva_fecha,
-                                                "hora_cita":  nueva_hora,
-                                                "estado":     "confirmada"
-                                            }).eq("tenant_id", tenant_id).eq("odoo_event_id", int(cita_id)).execute()
-                                            sb.table("citas_log").update({
-                                                "fecha_cita": nueva_fecha,
-                                                "hora_cita":  nueva_hora,
-                                                "estado":     "confirmada"
-                                            }).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id or "").execute()
+                                            appointment_log_repo.reschedule_by_odoo_id(tenant_id, int(cita_id), nueva_fecha, nueva_hora)
+                                            if sender_wa_id:
+                                                appointment_log_repo.reschedule_by_phone(tenant_id, sender_wa_id, nueva_fecha, nueva_hora)
                                             logger.info(f"Supabase citas_log actualizado: reagendada cita {cita_id} → {nueva_fecha} {nueva_hora}")
                                         except Exception as se:
                                             logger.warning(f"No se pudo actualizar citas_log en Supabase al reagendar: {se}")
+
                                     tool_result = json.dumps({
                                         "success": True,
                                         "message": f"¡Listo! Tu cita ha sido reprogramada con {profesional_nombre} al {nueva_fecha} a las {nueva_hora}."
@@ -670,11 +666,10 @@ class AIService:
                                             odoo.cancel_appointment_spa(old_id, sender_wa_id)
                                             if tenant_id:
                                                 try:
-                                                    from infrastructure.repositories.tenant_repo import get_supabase_client
-                                                    sb = get_supabase_client()
-                                                    sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("odoo_event_id", int(old_id)).execute()
+                                                    appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(old_id))
                                                 except Exception:
                                                     pass
+
                                 except Exception as ex_dup:
                                     logger.warning(f"Error cancelando cita previa en create_appointment: {ex_dup}")
 
@@ -771,12 +766,11 @@ class AIService:
                                     odoo.cancel_appointment_spa(cid, sender_wa_id or "")
                                     if tenant_id:
                                         try:
-                                            from infrastructure.repositories.tenant_repo import get_supabase_client
-                                            sb = get_supabase_client()
-                                            sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("odoo_event_id", int(cid)).execute()
-                                            sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id).execute()
+                                            appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(cid))
+                                            appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
                                         except Exception:
                                             pass
+
                         except Exception as fe:
                             logger.error(f"Error en safety cancel: {fe}")
 
@@ -808,12 +802,11 @@ class AIService:
                                 odoo.cancel_appointment_spa(cid, sender_wa_id or "")
                                 if tenant_id:
                                     try:
-                                        from infrastructure.repositories.tenant_repo import get_supabase_client
-                                        sb = get_supabase_client()
-                                        sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("odoo_event_id", int(cid)).execute()
-                                        sb.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id).execute()
+                                        appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(cid))
+                                        appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
                                     except Exception:
                                         pass
+
                     except Exception as fe:
                         logger.error(f"Error en safety cancel: {fe}")
 

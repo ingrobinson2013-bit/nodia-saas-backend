@@ -62,3 +62,30 @@ class TenantRepository:
         tenants = result.data or []
         # Excluir tenants con odoo_url vacío (columna NOT NULL pero seteada a "")
         return [t for t in tenants if t.get("notificaciones_citas", True) is not False and t.get("odoo_url", "").strip()]
+
+    def update_waba_id(self, tenant_id: str, waba_id: str) -> bool:
+        db = get_supabase()
+        try:
+            db.table("tenants").update({"waba_id": waba_id}).eq("tenant_id", tenant_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error actualizando waba_id: {e}")
+            return False
+
+    def update_tenant_credentials(self, tenant_id: str, credentials: dict) -> bool:
+        db = get_supabase()
+        try:
+            db.table("tenants").update(credentials).eq("tenant_id", tenant_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error actualizando credenciales del tenant: {e}")
+            return False
+
+
+def get_supabase_client():
+    """
+    Función de utilidad para compatibilidad con código heredado
+    que importe directamente desde tenant_repo.
+    """
+    return get_supabase()
+

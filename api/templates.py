@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from infrastructure.repositories.tenant_repo import TenantRepository
-from infrastructure.database import get_supabase
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -61,9 +61,8 @@ async def resolve_waba(tenant_id: str):
     if not waba_id:
         raise HTTPException(status_code=400, detail="No se pudo obtener WABA ID de Meta")
 
-    # Guardar en Supabase
-    db = get_supabase()
-    db.table("tenants").update({"waba_id": waba_id}).eq("tenant_id", tenant_id).execute()
+    # Guardar en Supabase usando el repositorio
+    tenant_repo.update_waba_id(tenant_id, waba_id)
     logger.info(f"[{tenant.get('nombre')}] waba_id={waba_id} guardado automaticamente")
 
     return {"waba_id": waba_id, "message": "WABA ID resuelto y guardado automaticamente"}

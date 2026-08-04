@@ -16,13 +16,19 @@ import re
 import asyncio
 from datetime import datetime, timezone
 from infrastructure.repositories.tenant_repo import TenantRepository
+from infrastructure.repositories.chat_session_repo import ChatSessionRepository
+from infrastructure.repositories.tenant_config_repo import TenantConfigRepository
+from infrastructure.repositories.appointment_log_repo import AppointmentLogRepository
 from domain.ai_service import AIService
 from domain.whatsapp_service import WhatsAppService
 from domain.prompt_builder import build_system_prompt
-from infrastructure.database import get_supabase
 
 logger = logging.getLogger(__name__)
 tenant_repo = TenantRepository()
+chat_session_repo = ChatSessionRepository()
+tenant_config_repo = TenantConfigRepository()
+appointment_log_repo = AppointmentLogRepository()
+
 
 MAX_HISTORY = 10  # Turnos maximos en contexto para OpenAI
 
@@ -61,10 +67,8 @@ class MessageHandler:
         tenant_id = tenant["tenant_id"]
         logger.info(f"[{tenant['nombre']}] Msg de {sender_wa_id}: {message_text[:60]}...")
 
-        db = get_supabase()
-
         # -- 2. Recuperar o crear sesion -------------------------------------
-        session = self._get_or_create_session(db, tenant_id, sender_wa_id, sender_name)
+        session = chat_session_repo.get_or_create(tenant_id, sender_wa_id, sender_name)
 
         # -- 3. Guardar el mensaje del usuario en el historial ---------------
         history = session.get("history") or []
@@ -77,19 +81,14 @@ class MessageHandler:
         # -- 4. Verificar bot_mode -------------------------------------------
         if not session.get("bot_mode", True):
             logger.info(f"[{tenant['nombre']}] bot_mode=False para {sender_wa_id}. IA pausada.")
-            self._update_session(db, session["id"], history + [user_message_entry])
+            chat_session_repo.update_history(session["id"], history + [user_message_entry])
             return
 
         # -- 5. Preparar historial para OpenAI --------------------------------
         history_context = history[-MAX_HISTORY:]
 
         # -- 6. Cargar tenant_config ------------------------------------------
-        tenant_config = None
-        try:
-            tc_result = db.table("tenant_config").select("*").eq("tenant_id", tenant_id).single().execute()
-            tenant_config = tc_result.data
-        except Exception:
-            pass
+        tenant_config = tenant_config_repo.get_by_tenant_id(tenant_id)
 
         # -- 7. Configurar Odoo si el tenant tiene credenciales ---------------
         odoo_config = None
@@ -104,40 +103,9 @@ class MessageHandler:
         # -- 8. Cargar citas desde Supabase citas_log -------------------------
         from datetime import date as date_cls
         hoy_iso = date_cls.today().strftime("%Y-%m-%d")
-        citas_cliente = []
-        citas_negocio = []
+        citas_cliente = appointment_log_repo.get_future_appointments_by_client(tenant_id, sender_wa_id, hoy_iso, limit=5)
+        citas_negocio = appointment_log_repo.get_future_appointments_by_tenant(tenant_id, hoy_iso, limit=30)
 
-        try:
-            r_cliente = (
-                db.table("citas_log")
-                .select("fecha_cita, hora_cita, servicio")
-                .eq("tenant_id", tenant_id)
-                .eq("wa_from", sender_wa_id)
-                .neq("estado", "cancelada")
-                .gte("fecha_cita", hoy_iso)
-                .order("fecha_cita", desc=False)
-                .limit(5)
-                .execute()
-            )
-            citas_cliente = r_cliente.data or []
-        except Exception as e:
-            logger.warning(f"No se pudieron cargar citas del cliente: {e}")
-
-        try:
-            r_negocio = (
-                db.table("citas_log")
-                .select("fecha_cita, hora_cita")
-                .eq("tenant_id", tenant_id)
-                .neq("estado", "cancelada")
-                .gte("fecha_cita", hoy_iso)
-                .order("fecha_cita", desc=False)
-                .order("hora_cita", desc=False)
-                .limit(30)
-                .execute()
-            )
-            citas_negocio = r_negocio.data or []
-        except Exception as e:
-            logger.warning(f"No se pudieron cargar citas del negocio: {e}")
 
         # -- 9. Construir prompt con contexto dinamico -----------------------
         from domain.prompt_builder import build_system_prompt, inject_dynamic_context
@@ -226,16 +194,7 @@ class MessageHandler:
 
                 from datetime import date as date_cls2
                 hoy_str = date_cls2.today().strftime("%Y-%m-%d")
-                existing_result = (
-                    db.table("citas_log")
-                    .select("id, odoo_event_id, fecha_cita")
-                    .eq("tenant_id", tenant_id)
-                    .eq("wa_from", sender_wa_id)
-                    .eq("estado", "confirmada")
-                    .gte("fecha_cita", hoy_str)
-                    .execute()
-                )
-                existing_citas = existing_result.data or []
+                existing_citas = appointment_log_repo.get_active_future_appointments(tenant_id, sender_wa_id, hoy_str)
 
                 if existing_citas:
                     if odoo_config:
@@ -253,7 +212,7 @@ class MessageHandler:
                         except Exception as oe:
                             logger.warning(f"Error OdooService al cancelar cita vieja: {oe}")
                     old_ids = [c["id"] for c in existing_citas]
-                    db.table("citas_log").update({"estado": "reagendada"}).in_("id", old_ids).execute()
+                    appointment_log_repo.update_status_by_ids(old_ids, "reagendada")
                     logger.info(f"[{tenant['nombre']}] {len(old_ids)} cita(s) marcadas reagendadas")
 
                 log_entry = {
@@ -267,13 +226,14 @@ class MessageHandler:
                     "origen":         "whatsapp_bot",
                     "estado":         "confirmada",
                 }
-                db.table("citas_log").insert(log_entry).execute()
+                appointment_log_repo.insert_log(log_entry)
                 accion = "reagendada" if existing_citas else "nueva"
                 logger.info(f"[{tenant['nombre']}] citas_log {accion}: {new_fecha} {new_hora} event_id={new_odoo_id}")
-                db.table("chat_sessions").update({
+                
+                chat_session_repo.update_session(session["id"], {
                     "estado": "cita_confirmada",
                     "cita_odoo_id": new_odoo_id,
-                }).eq("id", session["id"]).execute()
+                })
 
                 # ── Email de notificación al dueño del negocio ──
                 try:
@@ -287,6 +247,7 @@ class MessageHandler:
             except Exception as e:
                 logger.error(f"Error persistiendo citas_log: {e}")
 
+
         # -- 13. Otras acciones CRM via JSON en texto (ESCALATE/CANCEL/RESCHEDULE) --
         # BOOK ya fue manejado por ai_service via OpenAI tool calling
         crm_action = self._extract_crm_action(response_text)
@@ -297,7 +258,7 @@ class MessageHandler:
             logger.info(f"[{tenant['nombre']}] Accion CRM detectada: {action}")
 
             if action == "ESCALATE":
-                db.table("chat_sessions").update({"bot_mode": False}).eq("id", session["id"]).execute()
+                chat_session_repo.update_bot_mode(session["id"], False)
                 logger.info(f"[{tenant['nombre']}] Bot pausado por ESCALATE para {sender_wa_id}")
                 owner_phone = tenant.get("owner_phone")
                 if owner_phone:
@@ -325,38 +286,27 @@ class MessageHandler:
                     from domain.odoo_service import OdooService
                     odoo = OdooService(**odoo_config)
 
-                    # Buscar TODAS las citas activas del cliente (no canceladas ni reagendadas)
-                    q = (
-                        db.table("citas_log")
-                        .select("id, odoo_event_id, fecha_cita, hora_cita")
-                        .eq("tenant_id", tenant_id)
-                        .eq("wa_from", sender_wa_id)
-                        .neq("estado", "cancelada")
-                        .neq("estado", "reagendada")
+                    # Buscar TODAS las citas activas del cliente usando el repositorio
+                    citas_activas = appointment_log_repo.get_active_appointments_for_cancel(
+                        tenant_id=tenant_id,
+                        wa_from=sender_wa_id,
+                        date_str=date_str,
+                        time_str=time_str
                     )
-                    # Si GPT indicó fecha concreta, filtrar por ella
-                    if date_str:
-                        q = q.eq("fecha_cita", date_str)
-                    # Si GPT indicó hora concreta, filtrar por ella
-                    if time_str:
-                        hora_norm = time_str[:5] + ":00" if len(time_str) == 5 else time_str
-                        q = q.eq("hora_cita", hora_norm)
 
-                    cita_result = q.order("fecha_cita", desc=False).execute()
-
-                    if cita_result.data:
+                    if citas_activas:
                         canceladas_ids = []
-                        for cita in cita_result.data:
+                        for cita in citas_activas:
                             eid = cita.get("odoo_event_id")
                             if eid:
                                 odoo.cancel_appointment_spa(cita_id=int(eid), phone=sender_wa_id)
-                            db.table("citas_log").update({"estado": "cancelada"}).eq("id", cita["id"]).execute()
+                            appointment_log_repo.update_status_by_id(cita["id"], "cancelada")
                             canceladas_ids.append(cita["id"])
                         logger.info(f"[{tenant['nombre']}] Cita(s) cancelada(s) via citas_log: {canceladas_ids} — {sender_wa_id}")
                     else:
                         # Fallback: eliminar directamente de Odoo por número de teléfono
                         res_fallback = odoo.cancel_appointment_spa(phone=sender_wa_id)
-                        db.table("citas_log").update({"estado": "cancelada"}).eq("tenant_id", tenant_id).eq("wa_from", sender_wa_id).execute()
+                        appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
                         logger.info(f"[{tenant['nombre']}] CANCEL fallback directo en Odoo para {sender_wa_id} → {res_fallback}")
                 except Exception as e:
                     logger.error(f"Error procesando CANCEL: {e}")
@@ -368,16 +318,9 @@ class MessageHandler:
                 try:
                     from domain.odoo_service import OdooService
                     odoo = OdooService(**odoo_config)
-                    cita_result = (
-                        db.table("citas_log")
-                        .select("id, odoo_event_id")
-                        .eq("tenant_id", tenant_id)
-                        .eq("wa_from", sender_wa_id)
-                        .eq("fecha_cita", old_date)
-                        .execute()
-                    )
-                    if cita_result.data:
-                        cita = cita_result.data[0]
+                    citas_old = appointment_log_repo.get_appointment_by_date(tenant_id, sender_wa_id, old_date)
+                    if citas_old:
+                        cita = citas_old[0]
                         new_start_dt = f"{new_date} {new_time}:00"
                         if cita.get("odoo_event_id"):
                             odoo.reschedule_appointment(
@@ -385,10 +328,7 @@ class MessageHandler:
                                 date_str=new_date,
                                 time_str=new_time,
                             )
-                        db.table("citas_log").update({
-                            "fecha_cita": new_date,
-                            "hora_cita":  f"{new_time}:00",
-                        }).eq("id", cita["id"]).execute()
+                        appointment_log_repo.reschedule_appointment_log(cita["id"], new_date, new_time)
                         logger.info(f"[{tenant['nombre']}] Cita reagendada a {new_start_dt} para {sender_wa_id}")
                     else:
                         logger.warning(f"RESCHEDULE: no se encontro cita para {sender_wa_id} {old_date}")
@@ -411,7 +351,8 @@ class MessageHandler:
             },
         ]
         new_history = new_history[-(MAX_HISTORY * 2):]
-        self._update_session(db, session["id"], new_history)
+        chat_session_repo.update_history(session["id"], new_history)
+
 
         # -- 16. Enviar notificación de correo para lead calificado (exclusivo ventas) --
         from config import settings
@@ -442,58 +383,8 @@ class MessageHandler:
     # HELPERS
     # -------------------------------------------------------------------------
 
-    def _get_or_create_session(self, db, tenant_id: str, wa_from: str, name: str = None) -> dict:
-        try:
-            result = (
-                db.table("chat_sessions")
-                .select("*")
-                .eq("tenant_id", tenant_id)
-                .eq("wa_from", wa_from)
-                .single()
-                .execute()
-            )
-            if result.data:
-                existing = result.data
-                if not existing.get("name") and name:
-                    try:
-                        db.table("chat_sessions").update({"name": name}).eq("id", existing["id"]).execute()
-                        existing["name"] = name
-                    except Exception as ue:
-                        logger.warning(f"Error actualizando nombre en sesion existente: {ue}")
-                return existing
-        except Exception:
-            pass
-
-        try:
-            result = (
-                db.table("chat_sessions")
-                .insert({
-                    "tenant_id": tenant_id,
-                    "wa_from":   wa_from,
-                    "name":      name,
-                    "history":   [],
-                    "bot_mode":  True,
-                    "estado":    "activo",
-                })
-                .execute()
-            )
-            return result.data[0]
-        except Exception as e:
-            logger.error(f"Error creando sesion: {e}")
-            return {"id": None, "history": [], "bot_mode": True}
-
-    def _update_session(self, db, session_id: str, new_history: list):
-        if not session_id:
-            return
-        try:
-            db.table("chat_sessions").update({
-                "history":    new_history,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", session_id).execute()
-        except Exception as e:
-            logger.error(f"Error actualizando historial: {e}")
-
     def _extract_crm_action(self, text: str) -> dict | None:
+
         """
         Extrae acciones CRM en JSON del texto (ESCALATE, CANCEL, RESCHEDULE, LEAD, PQR).
         BOOK ya NO se maneja aqui — lo gestiona ai_service via OpenAI tool calling.

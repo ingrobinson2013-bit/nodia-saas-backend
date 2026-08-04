@@ -12,11 +12,15 @@ from pydantic import BaseModel, Field
 
 from infrastructure.repositories.tenant_repo import TenantRepository
 from domain.whatsapp_service import WhatsAppService
-from infrastructure.database import get_supabase
+from infrastructure.repositories.campaign_repo import CampaignRepository
+from infrastructure.repositories.chat_session_repo import ChatSessionRepository
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 tenant_repo = TenantRepository()
+campaign_repo = CampaignRepository()
+chat_session_repo = ChatSessionRepository()
+
 
 
 class ContactInput(BaseModel):
@@ -90,7 +94,6 @@ async def send_campaign(req: SendCampaignRequest):
         )
 
     wa = WhatsAppService(phone_number_id=phone_id, access_token=access_token)
-    db = get_supabase()
 
     total_contacts = len(req.contacts)
     sent_count = 0
@@ -193,38 +196,28 @@ async def send_campaign(req: SendCampaignRequest):
             # 3. Crear o actualizar sesión en chat_sessions para que aparezca en el Inbox
             try:
                 now_iso = datetime.now(timezone.utc).isoformat()
-                
-                # Buscar sesión existente (usando columna wa_from)
-                session_query = db.table("chat_sessions") \
-                    .select("id, history") \
-                    .eq("tenant_id", req.tenant_id) \
-                    .eq("wa_from", clean_phone) \
-                    .execute()
-
                 initial_history = [{
                     "role": "agent",
                     "content": f"📢 [CAMPAÑA REMARKETING: {req.campaign_name}]\n{personalized_text}",
                     "timestamp": now_iso
                 }]
 
-                if session_query.data:
-                    existing_session = session_query.data[0]
-                    h = existing_session.get("history") or []
+                session_query = chat_session_repo.get_by_tenant_and_phone(req.tenant_id, clean_phone)
+                if session_query:
+                    h = session_query.get("history") or []
                     h.extend(initial_history)
-                    db.table("chat_sessions").update({
+                    chat_session_repo.update_session(session_query["id"], {
                         "history": h,
                         "estado": "agente_ia",
                         "updated_at": now_iso
-                    }).eq("id", existing_session["id"]).execute()
+                    })
                 else:
-                    db.table("chat_sessions").insert({
-                        "tenant_id": req.tenant_id,
-                        "wa_from": clean_phone,
-                        "name": contact_name,
-                        "estado": "agente_ia",
+                    new_sess = chat_session_repo.get_or_create(req.tenant_id, clean_phone, contact_name)
+                    chat_session_repo.update_session(new_sess["id"], {
                         "history": initial_history,
+                        "estado": "agente_ia",
                         "updated_at": now_iso
-                    }).execute()
+                    })
             except Exception as sess_err:
                 logger.warning(f"No se pudo guardar la sesión en chat_sessions (omitido): {sess_err}")
 
@@ -244,16 +237,15 @@ async def send_campaign(req: SendCampaignRequest):
 
     # 4. Guardar registro de campaña en Supabase (si existe la tabla)
     try:
-        db.table("campaigns").insert({
-            "tenant_id": req.tenant_id,
-            "name": req.campaign_name,
-            "total_contacts": total_contacts,
-            "sent_count": sent_count,
-            "failed_count": failed_count,
-            "message_type": req.message_type,
-            "message": req.message,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        campaign_repo.insert_campaign(
+            tenant_id=req.tenant_id,
+            name=req.campaign_name,
+            total_contacts=total_contacts,
+            sent_count=sent_count,
+            failed_count=failed_count,
+            message_type=req.message_type,
+            message=req.message
+        )
     except Exception as db_err:
         logger.warning(f"No se pudo guardar registro de campaña en DB (omitido): {db_err}")
 
@@ -267,15 +259,15 @@ async def send_campaign(req: SendCampaignRequest):
     }
 
 
+
 @router.get("/campaigns/list/{tenant_id}")
 async def list_campaigns(tenant_id: str):
     """
     Retorna el historial de campañas enviadas por el tenant.
     """
-    db = get_supabase()
     try:
-        res = db.table("campaigns").select("*").eq("tenant_id", tenant_id).order("created_at", desc=True).execute()
-        return {"campaigns": res.data or []}
+        campaigns = campaign_repo.list_by_tenant(tenant_id)
+        return {"campaigns": campaigns}
     except Exception as e:
         logger.warning(f"No se pudo consultar historial de campañas: {e}")
         return {"campaigns": []}
@@ -295,8 +287,6 @@ async def check_contacts(req: CheckContactsRequest):
     if not req.phones:
         return {"results": {}}
 
-    db = get_supabase()
-
     # Normalizar teléfonos
     clean_phones = []
     for p in req.phones:
@@ -308,15 +298,11 @@ async def check_contacts(req: CheckContactsRequest):
         return {"results": {}}
 
     try:
-        # Consultar sesiones existentes en chat_sessions
-        res = db.table("chat_sessions") \
-            .select("wa_from, updated_at, history, name") \
-            .eq("tenant_id", req.tenant_id) \
-            .in_("wa_from", clean_phones) \
-            .execute()
+        # Consultar sesiones existentes en chat_sessions usando el repositorio
+        sessions = chat_session_repo.get_sessions_by_phones(req.tenant_id, clean_phones)
 
         results = {}
-        for session in (res.data or []):
+        for session in sessions:
             wa = session.get("wa_from")
             history = session.get("history") or []
             
@@ -339,3 +325,4 @@ async def check_contacts(req: CheckContactsRequest):
     except Exception as e:
         logger.error(f"Error verificando histórico de contactos: {e}")
         return {"results": {}}
+
