@@ -24,6 +24,15 @@ def _bogota_to_utc(date_str: str, time_str: str) -> str:
     return utc_dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _format_attendance_hour(hour_float: float) -> str:
+    """Convierte un float decimal de hora (ej: 8.5) a string legible (ej: 8:30am)."""
+    h = int(hour_float)
+    m = int(round((hour_float - h) * 60))
+    period = "am" if h < 12 else "pm"
+    h_12 = h if 0 < h <= 12 else h - 12 if h > 12 else 12
+    return f"{h_12}:{str(m).zfill(2)}{period}"
+
+
 def _duration_from_service(service_name: str, negocio_servicios: str = "") -> int:
     """
     Extrae la duración en minutos del nombre del servicio.
@@ -819,7 +828,7 @@ class OdooService:
             return []
 
     def get_professionals(self) -> list:
-        """Devuelve los profesionales activos en Odoo con sus especialidades (con caché simple)."""
+        """Devuelve los profesionales activos en Odoo con sus especialidades y horarios dinámicos (con caché simple)."""
         if not self.uid:
             return []
         
@@ -836,11 +845,11 @@ class OdooService:
                 return _PROFESSIONALS_CACHE[cache_key]
 
         try:
-            # 1. Obtener empleados activos y sus especialidades
+            # 1. Obtener empleados activos, sus especialidades y su calendario de recursos
             employees = self._execute(
                 "hr.employee", "search_read",
                 [[["active", "=", True]]],
-                {"fields": ["id", "name", "spa_specialties"]}
+                {"fields": ["id", "name", "spa_specialties", "resource_calendar_id"]}
             )
             
             # 2. Obtener nombres de productos/servicios para mapear especialidades
@@ -850,6 +859,33 @@ class OdooService:
                 {"fields": ["id", "name"]}
             )
             prod_map = {p["id"]: p["name"] for p in prods or [] if p.get("id") and p.get("name")}
+            
+            # 3. Obtener los horarios de atención (attendances) de los calendarios asociados
+            calendar_ids = list(set(
+                emp["resource_calendar_id"][0]
+                for emp in employees or []
+                if emp.get("resource_calendar_id") and isinstance(emp["resource_calendar_id"], list)
+            ))
+            
+            att_map = {}
+            if calendar_ids:
+                try:
+                    attendances = self._execute(
+                        "resource.calendar.attendance", "search_read",
+                        [[["calendar_id", "in", calendar_ids]]],
+                        {"fields": ["calendar_id", "dayofweek", "hour_from", "hour_to"]}
+                    )
+                    for att in attendances or []:
+                        cal_id = att["calendar_id"][0]
+                        if cal_id not in att_map:
+                            att_map[cal_id] = []
+                        att_map[cal_id].append(att)
+                except Exception as att_ex:
+                    logger.warning(f"No se pudieron cargar attendances de calendarios {calendar_ids}: {att_ex}")
+            
+            day_names = {
+                "0": "Lun", "1": "Mar", "2": "Mié", "3": "Jue", "4": "Vie", "5": "Sáb", "6": "Dom"
+            }
             
             # Nombres de sistema que nunca deben aparecer como profesionales al cliente
             SKIP_NAMES = {"administrator", "admin", "colaboradora", "colaborador"}
@@ -865,10 +901,40 @@ class OdooService:
                 # Excluir empleados sin ninguna especialidad asignada (no son profesionales activos)
                 if not specialty_names:
                     continue
+                
+                # Construir horario del profesional
+                cal_val = emp.get("resource_calendar_id")
+                schedule_parts = []
+                if cal_val and isinstance(cal_val, list):
+                    cal_id = cal_val[0]
+                    emp_atts = att_map.get(cal_id, [])
+                    # Ordenar por día de la semana y hora de inicio
+                    emp_atts.sort(key=lambda x: (int(x.get("dayofweek", 0)), float(x.get("hour_from", 0))))
+                    
+                    # Agrupar por día para franjas múltiples
+                    by_day = {}
+                    for att in emp_atts:
+                        day = att.get("dayofweek")
+                        if day not in by_day:
+                            by_day[day] = []
+                        by_day[day].append(att)
+                        
+                    for day_num in sorted(by_day.keys(), key=int):
+                        day_lbl = day_names.get(day_num, day_num)
+                        ranges = []
+                        for att in by_day[day_num]:
+                            t_from = _format_attendance_hour(att.get("hour_from"))
+                            t_to = _format_attendance_hour(att.get("hour_to"))
+                            ranges.append(f"{t_from}-{t_to}")
+                        schedule_parts.append(f"{day_lbl} {', '.join(ranges)}")
+                
+                schedule_text = "; ".join(schedule_parts) if schedule_parts else "Lun-Sáb 8:00am-7:00pm"
+                
                 result.append({
                     "id": emp.get("id"),
                     "name": emp_name,
-                    "specialties": specialty_names
+                    "specialties": specialty_names,
+                    "schedule": schedule_text
                 })
                 
             _PROFESSIONALS_CACHE[cache_key] = result

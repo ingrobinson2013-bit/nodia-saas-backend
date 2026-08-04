@@ -118,9 +118,10 @@ class MessageHandler:
             for p in profesionales_odoo:
                 p_name = p.get("name", "")
                 specs = p.get("specialties", [])
+                sched = p.get("schedule", "Lun-Sáb 8:00am-7:00pm")
                 if p_name:
                     specs_text = ", ".join(specs) if specs else "Cualquiera"
-                    profesionales.append(f"- {p_name} (ofrece: {specs_text})")
+                    profesionales.append(f"- {p_name} (ofrece: {specs_text} | Horario laboral: {sched})")
 
         ai_prompt_manual = tenant.get("ai_prompt") or ""
         if ai_prompt_manual and len(ai_prompt_manual.strip()) > 50:
