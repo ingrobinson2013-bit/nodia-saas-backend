@@ -98,12 +98,38 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 msg_type = msg.get("type")
                 logger.info(f"📨 Tipo={msg_type} | from={msg.get('from')}")
 
-                if msg_type != "text":
+                message_text = None
+
+                if msg_type == "text":
+                    message_text = msg.get("text", {}).get("body", "")
+
+                elif msg_type == "interactive":
+                    # Botones de respuesta rápida de plantilla (ej: "Más Info", "Darme de Baja")
+                    interactive = msg.get("interactive", {})
+                    inter_type = interactive.get("type")  # "button_reply" o "list_reply"
+                    if inter_type == "button_reply":
+                        btn = interactive.get("button_reply", {})
+                        btn_id    = btn.get("id", "")
+                        btn_title = btn.get("title", "")
+                        logger.info(f"🔘 Botón presionado: id='{btn_id}' title='{btn_title}'")
+                        # Tratar el título del botón como texto de entrada al agente IA
+                        message_text = btn_title
+                    elif inter_type == "list_reply":
+                        item = interactive.get("list_reply", {})
+                        message_text = item.get("title", item.get("id", ""))
+                    else:
+                        logger.info(f"⏭️  Interactive tipo '{inter_type}' no soportado")
+                        continue
+
+                else:
                     logger.info(f"⏭️  Tipo '{msg_type}' no soportado aún")
                     continue
 
+                if not message_text:
+                    logger.info("⏭️  Mensaje vacío, ignorado")
+                    continue
+
                 sender_wa_id = msg["from"]
-                message_text = msg["text"]["body"]
                 message_id   = msg["id"]
 
                 logger.info(f"✉️  Procesando: '{message_text[:80]}' de {sender_wa_id} (nombre={sender_name})")
