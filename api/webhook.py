@@ -103,6 +103,14 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 if msg_type == "text":
                     message_text = msg.get("text", {}).get("body", "")
 
+                elif msg_type == "button":
+                    # Respuesta a botón de plantilla aprobada (ej: "Más Info", "Darme de Baja")
+                    btn = msg.get("button", {})
+                    btn_text    = btn.get("text", "")
+                    btn_payload = btn.get("payload", "")
+                    logger.info(f"🔘 Botón de plantilla presionado: text='{btn_text}' payload='{btn_payload}'")
+                    message_text = btn_text or btn_payload
+
                 elif msg_type == "interactive":
                     # Botones de respuesta rápida de plantilla (ej: "Más Info", "Darme de Baja")
                     interactive = msg.get("interactive", {})
