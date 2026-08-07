@@ -373,6 +373,8 @@ class AIService:
                 )
 
                 response_message = response.choices[0].message
+                booking_data = None  # resultado de create_appointment si aplica
+                has_any_call = False
 
                 # ── Ciclo de tool calling ──────────────────────────────────
                 if response_message.tool_calls:
@@ -394,356 +396,341 @@ class AIService:
                         except Exception as tc_err:
                             logger.warning(f"No se pudo cargar el horario del tenant {tenant_id} en ai_service: {tc_err}")
 
+                    iteration = 0
+                    max_iterations = 3
 
-                    messages.append(response_message)
-                    booking_data = None  # resultado de create_appointment si aplica
+                    while iteration < max_iterations:
+                        curr_msg = response.choices[0].message
+                        if not curr_msg.tool_calls:
+                            break
 
-                    for tool_call in response_message.tool_calls:
-                        fn_name = tool_call.function.name
-                        fn_args = json.loads(tool_call.function.arguments or "{}")
+                        messages.append(curr_msg)
 
-                        if fn_name == "check_availability":
-                            date_str = fn_args.get("date_str", "")
-                            prof_name = fn_args.get("professional_name")
-                            serv_name = fn_args.get("service_name")
-                            
-                            # Auto-inferir profesional si el cliente tiene cita activa y no envió professional_name
-                            if not prof_name and sender_wa_id:
-                                try:
-                                    c_res = odoo.get_client_appointments(sender_wa_id)
-                                    c_list = c_res.get("citas", []) if isinstance(c_res, dict) else []
-                                    if c_list and isinstance(c_list[0], dict) and c_list[0].get("profesional"):
-                                        prof_name = c_list[0].get("profesional")
-                                        logger.info(f"Odoo check_availability: auto-inferido profesional='{prof_name}' desde cita activa de {sender_wa_id}")
-                                except Exception as ex_inf:
-                                    logger.warning(f"No se pudo inferir profesional desde cita activa: {ex_inf}")
+                        for tool_call in curr_msg.tool_calls:
+                            fn_name = tool_call.function.name
+                            fn_args = json.loads(tool_call.function.arguments or "{}")
 
-                            prof_id = odoo.find_professional_id(prof_name) if prof_name else None
-                            serv_id = odoo.find_service_id(serv_name) if serv_name else None
-                            
-                            dia_abierto = True
-                            if horario_comercial:
-                                ok_dia, err_dia = is_within_schedule(date_str, "12:00", horario_comercial, check_past=False)
-                                if not ok_dia and "cerrado" in err_dia.lower():
-                                    dia_abierto = False
+                            if fn_name in ["cancel_appointment", "reschedule_appointment"]:
+                                has_any_call = True
 
-                            ofrece_servicio = True
-                            if prof_id and serv_id:
-                                ofrece_servicio = odoo.check_professional_specialty(prof_id, serv_id)
-
-                            if not dia_abierto:
-                                tool_result = json.dumps({
-                                    "success": False,
-                                    "abierto": False,
-                                    "message": f"Lo siento, el negocio está cerrado ese día. Nuestro horario de atención es: {horario_comercial}"
-                                }, ensure_ascii=False)
-                            elif not ofrece_servicio:
-                                tool_result = json.dumps({
-                                    "success": False,
-                                    "ofrece_servicio": False,
-                                    "message": f"Lo siento, el profesional '{prof_name}' no ofrece el servicio '{serv_name}' en su catálogo."
-                                }, ensure_ascii=False)
-                            else:
-                                result = odoo.check_availability(date_str, professional_id=prof_id)
+                            if fn_name == "check_availability":
+                                date_str = fn_args.get("date_str", "")
+                                prof_name = fn_args.get("professional_name")
+                                serv_name = fn_args.get("service_name")
                                 
-                                if prof_id:
-                                    raw_slots = odoo.get_available_slots(date_str, professional_id=prof_id, service_id=serv_id)
-                                    avail_times = [s.get("time") for s in raw_slots if isinstance(s, dict) and s.get("available")]
-                                    slots_info = {
-                                        "profesional": prof_name,
-                                        "professional_id": prof_id,
-                                        "horas_libres": avail_times
-                                    }
+                                # Auto-inferir profesional si el cliente tiene cita activa y no envió professional_name
+                                if not prof_name and sender_wa_id:
+                                    try:
+                                        c_res = odoo.get_client_appointments(sender_wa_id)
+                                        c_list = c_res.get("citas", []) if isinstance(c_res, dict) else []
+                                        if c_list and isinstance(c_list[0], dict) and c_list[0].get("profesional"):
+                                            prof_name = c_list[0].get("profesional")
+                                            logger.info(f"Odoo check_availability: auto-inferido profesional='{prof_name}' desde cita activa de {sender_wa_id}")
+                                    except Exception as ex_inf:
+                                        logger.warning(f"No se pudo inferir profesional desde cita activa: {ex_inf}")
+
+                                prof_id = odoo.find_professional_id(prof_name) if prof_name else None
+                                serv_id = odoo.find_service_id(serv_name) if serv_name else None
+                                
+                                dia_abierto = True
+                                if horario_comercial:
+                                    ok_dia, err_dia = is_within_schedule(date_str, "12:00", horario_comercial, check_past=False)
+                                    if not ok_dia and "cerrado" in err_dia.lower():
+                                        dia_abierto = False
+
+                                ofrece_servicio = True
+                                if prof_id and serv_id:
+                                    ofrece_servicio = odoo.check_professional_specialty(prof_id, serv_id)
+
+                                if not dia_abierto:
+                                    tool_result = json.dumps({
+                                        "success": False,
+                                        "abierto": False,
+                                        "message": f"Lo siento, el negocio está cerrado ese día. Nuestro horario de atención es: {horario_comercial}"
+                                    }, ensure_ascii=False)
+                                elif not ofrece_servicio:
+                                    tool_result = json.dumps({
+                                        "success": False,
+                                        "ofrece_servicio": False,
+                                        "message": f"Lo siento, el profesional '{prof_name}' no ofrece el servicio '{serv_name}' en su catálogo."
+                                    }, ensure_ascii=False)
                                 else:
-                                    # Filtrar slots independientemente por CADA professional_id
-                                    profs_list = odoo.get_professionals()
-                                    slots_by_prof = {}
-                                    general_avail = set()
-                                    for p in profs_list:
-                                        p_id = p.get("id")
-                                        p_name = p.get("name")
-                                        if p_id and p_name:
-                                            p_slots = odoo.get_available_slots(date_str, professional_id=p_id, service_id=serv_id)
-                                            p_times = [s.get("time") for s in p_slots if isinstance(s, dict) and s.get("available")]
-                                            slots_by_prof[p_name] = p_times
-                                            general_avail.update(p_times)
+                                    result = odoo.check_availability(date_str, professional_id=prof_id)
                                     
-                                    slots_info = {
-                                        "disponibilidad_por_profesional": slots_by_prof,
-                                        "horas_libres_generales": sorted(list(general_avail))
-                                    }
+                                    if prof_id:
+                                        raw_slots = odoo.get_available_slots(date_str, professional_id=prof_id, service_id=serv_id)
+                                        avail_times = [s.get("time") for s in raw_slots if isinstance(s, dict) and s.get("available")]
+                                        slots_info = {
+                                            "profesional": prof_name,
+                                            "professional_id": prof_id,
+                                            "horas_libres": avail_times
+                                        }
+                                        tool_result = json.dumps(slots_info, ensure_ascii=False)
+                                    else:
+                                        tool_result = json.dumps(result, ensure_ascii=False)
+                                logger.info(f"Odoo check_availability: {date_str} prof={prof_name}({prof_id}) → {len(result) if (ofrece_servicio and dia_abierto) else 0} eventos")
 
-                                tool_result = json.dumps({
-                                    "success": True,
-                                    "ofrece_servicio": True,
-                                    "abierto": True,
-                                    "eventos_ocupados": result, 
-                                    "slots_disponibles": slots_info,
-                                    "profesional_solicitado": {"nombre": prof_name, "id": prof_id} if prof_name else None,
-                                    "servicio_solicitado": {"nombre": serv_name, "id": serv_id} if serv_name else None
-                                }, ensure_ascii=False)
-                            logger.info(f"Odoo check_availability: {date_str} prof={prof_name}({prof_id}) ofrece={ofrece_servicio} abierto={dia_abierto} → {len(result) if (ofrece_servicio and dia_abierto) else 0} eventos")
+                            elif fn_name == "get_my_appointments":
+                                client_phone = fn_args.get("phone", sender_wa_id or "")
+                                res = odoo.get_client_appointments(client_phone)
+                                if not isinstance(res, dict):
+                                    res = {"success": True, "citas": res if isinstance(res, list) else [], "total": len(res) if isinstance(res, list) else 0}
+                                tool_result = json.dumps(res, ensure_ascii=False)
+                                total_cnt = res.get("total", len(res.get("citas", [])))
+                                logger.info(f"Odoo get_my_appointments para {client_phone} → {total_cnt} citas")
 
-                        elif fn_name == "get_my_appointments":
-                            client_phone = sender_wa_id or fn_args.get("phone") or ""
-                            res = odoo.get_client_appointments(client_phone)
-                            if not isinstance(res, dict):
-                                res = {"success": True, "citas": res if isinstance(res, list) else [], "total": len(res) if isinstance(res, list) else 0}
-                            tool_result = json.dumps(res, ensure_ascii=False)
-                            total_cnt = res.get("total", len(res.get("citas", [])))
-                            logger.info(f"Odoo get_my_appointments para {client_phone} → {total_cnt} citas")
-
-                        elif fn_name == "cancel_appointment":
-                            cita_id = fn_args.get("cita_id")
-                            res = odoo.cancel_appointment_spa(cita_id, sender_wa_id or "")
-                            if not isinstance(res, dict):
-                                res = {"success": True, "message": str(res)}
-                            
-                            # ✅ Sincronizar cancelación en Supabase citas_log usando el repositorio
-                            if res.get("success") and tenant_id:
-                                try:
-                                    if cita_id:
-                                        appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(cita_id))
-                                    if sender_wa_id:
-                                        appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
-                                    logger.info(f"Supabase citas_log sincronizado: estado='cancelada' para {sender_wa_id} cita_id={cita_id}")
-                                except Exception as se:
-                                    logger.warning(f"No se pudo actualizar citas_log en Supabase al cancelar: {se}")
+                            elif fn_name == "cancel_appointment":
+                                cita_id = fn_args.get("cita_id")
+                                res = odoo.cancel_appointment_spa(cita_id, sender_wa_id or "")
+                                if not isinstance(res, dict):
+                                    res = {"success": True, "message": str(res)}
+                                
+                                # ✅ Sincronizar cancelación en Supabase citas_log usando el repositorio
+                                if res.get("success") and tenant_id:
+                                    try:
+                                        if cita_id:
+                                            appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(cita_id))
+                                        if sender_wa_id:
+                                            appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
+                                        logger.info(f"Supabase citas_log sincronizado: estado='cancelada' para {sender_wa_id} cita_id={cita_id}")
+                                    except Exception as se:
+                                        logger.warning(f"No se pudo actualizar citas_log en Supabase al cancelar: {se}")
 
 
-                            tool_result = json.dumps(res, ensure_ascii=False)
-                            logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
+                                tool_result = json.dumps(res, ensure_ascii=False)
+                                logger.info(f"Odoo cancel_appointment cita_id={cita_id} para {sender_wa_id} → {res.get('success')}")
 
-                        elif fn_name == "reschedule_appointment":
-                            cita_id_raw = fn_args.get("cita_id")
-                            nueva_fecha = _clean_date(fn_args.get("nueva_fecha", ""))
-                            nueva_hora  = _clean_time(fn_args.get("nueva_hora", ""))
+                            elif fn_name == "reschedule_appointment":
+                                cita_id_raw = fn_args.get("cita_id")
+                                nueva_fecha = _clean_date(fn_args.get("nueva_fecha", ""))
+                                nueva_hora  = _clean_time(fn_args.get("nueva_hora", ""))
 
-                            # Parseo seguro de cita_id (int/str)
-                            cita_id = None
-                            try:
-                                if isinstance(cita_id_raw, str):
-                                    digits = "".join(c for c in cita_id_raw if c.isdigit())
-                                    cita_id = int(digits) if digits else None
-                                elif cita_id_raw:
-                                    cita_id = int(cita_id_raw)
-                            except Exception:
+                                # Parseo seguro de cita_id (int/str)
                                 cita_id = None
+                                try:
+                                    if isinstance(cita_id_raw, str):
+                                        digits = "".join(c for c in cita_id_raw if c.isdigit())
+                                        cita_id = int(digits) if digits else None
+                                    elif cita_id_raw:
+                                        cita_id = int(cita_id_raw)
+                                except Exception:
+                                    cita_id = None
 
-                            # 0. Validar si la nueva fecha/hora ya pasó en Bogotá
-                            try:
-                                from zoneinfo import ZoneInfo
-                                bogota_tz = ZoneInfo("America/Bogota")
-                            except ImportError:
-                                from datetime import timezone, timedelta
-                                bogota_tz = timezone(timedelta(hours=-5))
+                                # 0. Validar si la nueva fecha/hora ya pasó en Bogotá
+                                try:
+                                    from zoneinfo import ZoneInfo
+                                    bogota_tz = ZoneInfo("America/Bogota")
+                                except ImportError:
+                                    from datetime import timezone, timedelta
+                                    bogota_tz = timezone(timedelta(hours=-5))
 
-                            ahora_bogota = datetime.now(bogota_tz)
-                            try:
-                                y, mo, d = map(int, nueva_fecha.split("-"))
-                                h, m = map(int, nueva_hora.split(":"))
-                                fecha_hora_resched = datetime(y, mo, d, h, m, tzinfo=bogota_tz)
-                                if fecha_hora_resched <= ahora_bogota:
+                                try:
+                                    ahora_bogota = datetime.now(bogota_tz)
+                                    y, mo, d = map(int, nueva_fecha.split("-"))
+                                    h, m = map(int, nueva_hora.split(":"))
+                                    fecha_hora_resched = datetime(y, mo, d, h, m, tzinfo=bogota_tz)
+                                    if fecha_hora_resched <= ahora_bogota:
+                                        tool_result = json.dumps({
+                                            "success": False,
+                                            "error_code": "PAST_DATE_TIME",
+                                            "message": f"No es posible reprogramar una cita a una fecha u hora que ya pasó ({nueva_fecha} {nueva_hora}). Por favor elige una fecha y hora futura."
+                                        }, ensure_ascii=False)
+                                        logger.info(f"Odoo reschedule_appointment: intento de reagendar en fecha/hora pasada → {nueva_fecha} {nueva_hora}")
+                                        continue
+                                except Exception as ex_p:
+                                    logger.warning(f"Error validando fecha pasada en reschedule: {ex_p}")
+
+                                # 0b. Validar si la nueva fecha/hora está dentro del horario comercial
+                                if horario_comercial:
+                                    ok_sch, err_sch = is_within_schedule(nueva_fecha, nueva_hora, horario_comercial)
+                                    if not ok_sch:
+                                        tool_result = json.dumps({
+                                            "success": False,
+                                            "message": f"Lo siento, la nueva hora {nueva_hora} no es posible. {err_sch}"
+                                        }, ensure_ascii=False)
+                                        logger.info(f"Odoo reschedule_appointment: horario no permitido → {nueva_fecha} {nueva_hora}")
+                                        continue
+
+                                # 1. Obtener la cita actual para saber el profesional asignado
+                                citas_actuales = odoo.get_client_appointments(sender_wa_id or "")
+                                c_list = citas_actuales.get("citas", []) if isinstance(citas_actuales, dict) else []
+                                
+                                # Coincidencia flexible por string para evitar descalce int vs str
+                                cita_actual = None
+                                if cita_id:
+                                    cita_actual = next((c for c in c_list if str(c.get("id")) == str(cita_id)), None)
+                                if not cita_actual and c_list:
+                                    cita_actual = c_list[0]
+                                if cita_actual:
+                                    cita_id = cita_actual.get("id")
+
+                                profesional_id = cita_actual.get("profesional_id") if cita_actual else None
+                                profesional_nombre = cita_actual.get("profesional", "el profesional") if cita_actual else "el profesional"
+
+                                # 2. Verificar disponibilidad del PROFESIONAL en la nueva fecha/hora (en UTC)
+                                from domain.odoo_service import _bogota_to_utc
+                                nueva_start_utc = _bogota_to_utc(nueva_fecha, nueva_hora)  # "YYYY-MM-DD HH:MM:SS"
+                                eventos_dia = odoo.check_availability(nueva_fecha)
+
+                                # Filtrar eventos del mismo profesional en el mismo horario UTC
+                                def _mismo_prof(ev):
+                                    if not profesional_id:
+                                        return False  # sin profesional específico, no bloquear arbitrariamente
+                                    pf = ev.get(odoo.professional_field_name or "spa_professional_id")
+                                    if isinstance(pf, (list, tuple)) and len(pf) >= 1:
+                                        return int(pf[0]) == int(profesional_id)
+                                    if isinstance(pf, dict):
+                                        return int(pf.get("id", 0)) == int(profesional_id)
+                                    return False
+
+                                ocupado = any(
+                                    ev.get("start") == nueva_start_utc and _mismo_prof(ev)
+                                    for ev in eventos_dia or []
+                                )
+
+                                if ocupado:
+                                    tool_result = json.dumps({
+                                        "success": False,
+                                        "message": f"Lo siento, el profesional {profesional_nombre} ya tiene una cita reservada a las {nueva_hora} en esa fecha. Por favor elige otro horario."
+                                    }, ensure_ascii=False)
+                                    logger.info(f"Odoo reschedule_appointment: conflicto de horario → {nueva_fecha} {nueva_hora} con {profesional_nombre}")
+                                else:
+                                    ok = odoo.reschedule_appointment(
+                                        event_id=int(cita_id),
+                                        date_str=nueva_fecha,
+                                        time_str=nueva_hora,
+                                    )
+                                    if ok:
+                                        # Sincronizar en Supabase citas_log
+                                        if tenant_id:
+                                            try:
+                                                appointment_log_repo.reschedule_by_odoo_id(tenant_id, int(cita_id), nueva_fecha, nueva_hora)
+                                                if sender_wa_id:
+                                                    appointment_log_repo.reschedule_by_phone(tenant_id, sender_wa_id, nueva_fecha, nueva_hora)
+                                                logger.info(f"Supabase citas_log actualizado: reagendada cita {cita_id} → {nueva_fecha} {nueva_hora}")
+                                            except Exception as se:
+                                                logger.warning(f"No se pudo actualizar citas_log en Supabase al reagendar: {se}")
+
+                                        tool_result = json.dumps({
+                                            "success": True,
+                                            "message": f"¡Listo! Tu cita ha sido reprogramada con {profesional_nombre} al {nueva_fecha} a las {nueva_hora}."
+                                        }, ensure_ascii=False)
+                                        logger.info(f"Odoo reschedule_appointment cita_id={cita_id} prof={profesional_nombre} → {nueva_fecha} {nueva_hora} ✅")
+                                    else:
+                                        tool_result = json.dumps({
+                                            "success": False,
+                                            "message": "No se pudo reprogramar la cita. Por favor intenta de nuevo o comunícate con nosotros."
+                                        }, ensure_ascii=False)
+
+                            elif fn_name == "create_appointment":
+                                fecha_req = _clean_date(fn_args.get("fecha", ""))
+                                hora_req = _clean_time(fn_args.get("hora", "00:00"))
+
+                                # 0. Validar si la fecha/hora está dentro del horario comercial
+                                if horario_comercial:
+                                    ok_sch, err_sch = is_within_schedule(fecha_req, hora_req, horario_comercial)
+                                    if not ok_sch:
+                                        tool_result = json.dumps({
+                                            "success": False,
+                                            "error_code": "OUTSIDE_SCHEDULE",
+                                            "message": f"Lo siento, la hora {hora_req} no es posible. {err_sch}"
+                                        }, ensure_ascii=False)
+                                        logger.info(f"Odoo create_appointment: horario no permitido → {fecha_req} {hora_req}")
+                                        continue
+
+                                # Auto-cancelar citas anteriores activas si el usuario está agendando de nuevo o cambiando
+                                if sender_wa_id:
+                                    try:
+                                        prev_res = odoo.get_client_appointments(sender_wa_id)
+                                        prev_list = prev_res.get("citas", []) if isinstance(prev_res, dict) else []
+                                        for old_c in prev_list:
+                                            old_id = old_c.get("id")
+                                            if old_id:
+                                                logger.info(f"Odoo: eliminando cita previa {old_id} de {sender_wa_id} al crear nueva cita...")
+                                                odoo.cancel_appointment_spa(old_id, sender_wa_id)
+                                                if tenant_id:
+                                                    try:
+                                                        appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(old_id))
+                                                    except Exception:
+                                                        pass
+
+                                    except Exception as ex_dup:
+                                        logger.warning(f"Error cancelando cita previa en create_appointment: {ex_dup}")
+
+                                # ✅ Crear la cita en Odoo directamente desde ai_service
+                                event_id = odoo.create_appointment(
+                                    name=fn_args.get("cliente_nombre", sender_name or sender_wa_id or "Cliente"),
+                                    phone=sender_wa_id or "",
+                                    date_str=fecha_req,
+                                    time_str=hora_req,
+                                    service_name=fn_args.get("servicio", ""),
+                                    price=fn_args.get("precio", ""),
+                                    negocio_servicios=negocio_servicios,
+                                    description="Beautysync - Agendamiento",
+                                    professional_name=fn_args.get("profesional_nombre", ""),
+                                )
+                                if event_id == "PAST_DATE_TIME":
                                     tool_result = json.dumps({
                                         "success": False,
                                         "error_code": "PAST_DATE_TIME",
-                                        "message": f"No es posible reprogramar una cita a una fecha u hora que ya pasó ({nueva_fecha} {nueva_hora}). Por favor elige una fecha y hora futura."
+                                        "message": "Lo siento, no es posible agendar en una fecha u hora que ya pasó. Por favor elige una fecha y hora futura."
                                     }, ensure_ascii=False)
-                                    logger.info(f"Odoo reschedule_appointment: intento de reagendar en fecha/hora pasada → {nueva_fecha} {nueva_hora}")
-                                    continue
-                            except Exception as ex_p:
-                                logger.warning(f"Error validando fecha pasada en reschedule: {ex_p}")
-
-                            # 0b. Validar si la nueva fecha/hora está dentro del horario comercial
-                            if horario_comercial:
-                                ok_sch, err_sch = is_within_schedule(nueva_fecha, nueva_hora, horario_comercial)
-                                if not ok_sch:
+                                elif event_id == "SPECIALTY_INCOMPATIBLE":
                                     tool_result = json.dumps({
                                         "success": False,
-                                        "message": f"Lo siento, la nueva hora {nueva_hora} no es posible. {err_sch}"
+                                        "error_code": "SPECIALTY_INCOMPATIBLE",
+                                        "message": f"Lo siento, el profesional '{fn_args.get('profesional_nombre')}' no ofrece el servicio '{fn_args.get('servicio')}' en su catálogo."
                                     }, ensure_ascii=False)
-                                    logger.info(f"Odoo reschedule_appointment: horario no permitido → {nueva_fecha} {nueva_hora}")
-                                    continue
-
-                            # 1. Obtener la cita actual para saber el profesional asignado
-                            citas_actuales = odoo.get_client_appointments(sender_wa_id or "")
-                            c_list = citas_actuales.get("citas", []) if isinstance(citas_actuales, dict) else []
-                            
-                            # Coincidencia flexible por string para evitar descalce int vs str
-                            cita_actual = None
-                            if cita_id:
-                                cita_actual = next((c for c in c_list if str(c.get("id")) == str(cita_id)), None)
-                            if not cita_actual and c_list:
-                                cita_actual = c_list[0]
-                            if cita_actual:
-                                cita_id = cita_actual.get("id")
-
-                            profesional_id = cita_actual.get("profesional_id") if cita_actual else None
-                            profesional_nombre = cita_actual.get("profesional", "el profesional") if cita_actual else "el profesional"
-
-                            # 2. Verificar disponibilidad del PROFESIONAL en la nueva fecha/hora (en UTC)
-                            from domain.odoo_service import _bogota_to_utc
-                            nueva_start_utc = _bogota_to_utc(nueva_fecha, nueva_hora)  # "YYYY-MM-DD HH:MM:SS"
-                            eventos_dia = odoo.check_availability(nueva_fecha)
-
-                            # Filtrar eventos del mismo profesional en el mismo horario UTC
-                            def _mismo_prof(ev):
-                                if not profesional_id:
-                                    return False  # sin profesional específico, no bloquear arbitrariamente
-                                pf = ev.get(odoo.professional_field_name or "spa_professional_id")
-                                if isinstance(pf, (list, tuple)) and len(pf) >= 1:
-                                    return int(pf[0]) == int(profesional_id)
-                                if isinstance(pf, dict):
-                                    return int(pf.get("id", 0)) == int(profesional_id)
-                                return False
-
-                            ocupado = any(
-                                ev.get("start", "")[:16] == nueva_start_utc[:16]
-                                and str(ev.get("id")) != str(cita_id)
-                                and _mismo_prof(ev)
-                                for ev in eventos_dia
-                            )
-
-                            if ocupado:
-                                tool_result = json.dumps({
-                                    "success": False,
-                                    "message": f"Lo siento, {profesional_nombre} ya tiene una cita a las {nueva_hora} del {nueva_fecha}. Por favor elige otra hora."
-                                }, ensure_ascii=False)
-                            else:
-                                if not cita_id:
-                                    tool_result = json.dumps({
-                                        "success": False,
-                                        "message": "No se pudo identificar la cita a reprogramar."
-                                    }, ensure_ascii=False)
-                                    continue
-                                ok = odoo.reschedule_appointment(int(cita_id), nueva_fecha, nueva_hora)
-                                if ok:
-                                    # Sincronizar en Supabase citas_log
-                                    if tenant_id:
-                                        try:
-                                            appointment_log_repo.reschedule_by_odoo_id(tenant_id, int(cita_id), nueva_fecha, nueva_hora)
-                                            if sender_wa_id:
-                                                appointment_log_repo.reschedule_by_phone(tenant_id, sender_wa_id, nueva_fecha, nueva_hora)
-                                            logger.info(f"Supabase citas_log actualizado: reagendada cita {cita_id} → {nueva_fecha} {nueva_hora}")
-                                        except Exception as se:
-                                            logger.warning(f"No se pudo actualizar citas_log en Supabase al reagendar: {se}")
-
+                                elif event_id:
+                                    logger.info(
+                                        f"✅ Odoo: cita creada tool_call event_id={event_id} "
+                                        f"— {fn_args.get('servicio')} {fn_args.get('fecha')} {fn_args.get('hora')}"
+                                    )
+                                    booking_data = {
+                                        "odoo_event_id": event_id,
+                                        "cliente_nombre": fn_args.get("cliente_nombre", ""),
+                                        "servicio": fn_args.get("servicio", ""),
+                                        "precio": fn_args.get("precio", ""),
+                                        "fecha": fn_args.get("fecha", ""),
+                                        "hora": fn_args.get("hora", ""),
+                                    }
                                     tool_result = json.dumps({
                                         "success": True,
-                                        "message": f"¡Listo! Tu cita ha sido reprogramada con {profesional_nombre} al {nueva_fecha} a las {nueva_hora}."
-                                    }, ensure_ascii=False)
-                                    logger.info(f"Odoo reschedule_appointment cita_id={cita_id} prof={profesional_nombre} → {nueva_fecha} {nueva_hora} ✅")
+                                        "event_id": event_id,
+                                        "message": f"Cita creada exitosamente con ID {event_id}"
+                                    })
                                 else:
+                                    logger.error("❌ create_appointment retornó None — fallo en Odoo")
                                     tool_result = json.dumps({
                                         "success": False,
-                                        "message": "No se pudo reprogramar la cita. Por favor intenta de nuevo o comunícate con nosotros."
-                                    }, ensure_ascii=False)
-
-                        elif fn_name == "create_appointment":
-                            fecha_req = _clean_date(fn_args.get("fecha", ""))
-                            hora_req = _clean_time(fn_args.get("hora", "00:00"))
-
-                            # 0. Validar si la fecha/hora está dentro del horario comercial
-                            if horario_comercial:
-                                ok_sch, err_sch = is_within_schedule(fecha_req, hora_req, horario_comercial)
-                                if not ok_sch:
-                                    tool_result = json.dumps({
-                                        "success": False,
-                                        "error_code": "OUTSIDE_SCHEDULE",
-                                        "message": f"Lo siento, la hora {hora_req} no es posible. {err_sch}"
-                                    }, ensure_ascii=False)
-                                    logger.info(f"Odoo create_appointment: horario no permitido → {fecha_req} {hora_req}")
-                                    continue
-
-                            # Auto-cancelar citas anteriores activas si el usuario está agendando de nuevo o cambiando
-                            if sender_wa_id:
-                                try:
-                                    prev_res = odoo.get_client_appointments(sender_wa_id)
-                                    prev_list = prev_res.get("citas", []) if isinstance(prev_res, dict) else []
-                                    for old_c in prev_list:
-                                        old_id = old_c.get("id")
-                                        if old_id:
-                                            logger.info(f"Odoo: eliminando cita previa {old_id} de {sender_wa_id} al crear nueva cita...")
-                                            odoo.cancel_appointment_spa(old_id, sender_wa_id)
-                                            if tenant_id:
-                                                try:
-                                                    appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(old_id))
-                                                except Exception:
-                                                    pass
-
-                                except Exception as ex_dup:
-                                    logger.warning(f"Error cancelando cita previa en create_appointment: {ex_dup}")
-
-                            # ✅ Crear la cita en Odoo directamente desde ai_service
-                            event_id = odoo.create_appointment(
-                                name=fn_args.get("cliente_nombre", sender_name or sender_wa_id or "Cliente"),
-                                phone=sender_wa_id or "",
-                                date_str=fecha_req,
-                                time_str=hora_req,
-                                service_name=fn_args.get("servicio", ""),
-                                price=fn_args.get("precio", ""),
-                                negocio_servicios=negocio_servicios,
-                                description="Beautysync - Agendamiento",
-                                professional_name=fn_args.get("profesional_nombre", ""),
-                            )
-                            if event_id == "PAST_DATE_TIME":
-                                tool_result = json.dumps({
-                                    "success": False,
-                                    "error_code": "PAST_DATE_TIME",
-                                    "message": "Lo siento, no es posible agendar en una fecha u hora que ya pasó. Por favor elige una fecha y hora futura."
-                                }, ensure_ascii=False)
-                            elif event_id == "SPECIALTY_INCOMPATIBLE":
-                                tool_result = json.dumps({
-                                    "success": False,
-                                    "error_code": "SPECIALTY_INCOMPATIBLE",
-                                    "message": f"Lo siento, el profesional '{fn_args.get('profesional_nombre')}' no ofrece el servicio '{fn_args.get('servicio')}' en su catálogo."
-                                }, ensure_ascii=False)
-                            elif event_id:
-                                logger.info(
-                                    f"✅ Odoo: cita creada tool_call event_id={event_id} "
-                                    f"— {fn_args.get('servicio')} {fn_args.get('fecha')} {fn_args.get('hora')}"
-                                )
-                                booking_data = {
-                                    "odoo_event_id": event_id,
-                                    "cliente_nombre": fn_args.get("cliente_nombre", ""),
-                                    "servicio": fn_args.get("servicio", ""),
-                                    "precio": fn_args.get("precio", ""),
-                                    "fecha": fn_args.get("fecha", ""),
-                                    "hora": fn_args.get("hora", ""),
-                                }
-                                tool_result = json.dumps({
-                                    "success": True,
-                                    "event_id": event_id,
-                                    "message": f"Cita creada exitosamente con ID {event_id}"
-                                })
+                                        "message": "No se pudo crear la cita en Odoo. Reintenta."
+                                    })
                             else:
-                                logger.error("❌ create_appointment retornó None — fallo en Odoo")
-                                tool_result = json.dumps({
-                                    "success": False,
-                                    "message": "No se pudo crear la cita en Odoo. Reintenta."
-                                })
-                        else:
-                            tool_result = json.dumps({"error": "Funcion no reconocida"})
+                                tool_result = json.dumps({"error": "Funcion no reconocida"})
 
-                        messages.append({
-                            "tool_call_id": tool_call.id,
-                            "role": "tool",
-                            "name": fn_name,
-                            "content": tool_result,
-                        })
+                            messages.append({
+                                "tool_call_id": tool_call.id,
+                                "role": "tool",
+                                "name": fn_name,
+                                "content": tool_result,
+                            })
 
-                    # Segunda llamada: GPT genera el mensaje final para el cliente
-                    second = await self.client.chat.completions.create(
-                        model=self.model,
-                        messages=messages,
-                        max_tokens=600,
-                        temperature=0.4,
-                    )
-                    final_text = second.choices[0].message.content.strip()
+                        # Segunda llamada dentro del ciclo: GPT genera la respuesta o pide la siguiente herramienta
+                        response = await self.client.chat.completions.create(
+                            model=self.model,
+                            messages=messages,
+                            tools=tools,
+                            tool_choice="auto",
+                            max_tokens=600,
+                            temperature=0.4,
+                        )
+                        iteration += 1
+
+                    final_text = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
 
                     # Sanitizador de reprogramación: Si el texto afirma que 'Voy a reprogramar para X' sin tool call o con fechas pasadas/inventadas
                     if any(k in final_text.lower() for k in ["reprogramar", "reagendar"]):
-                        if not any(tc.function.name == "reschedule_appointment" for tc in response_message.tool_calls):
+                        if not has_any_call:
                             if re.search(r"voy a (?:reprogramar|reagendar) (?:esa cita|tu cita) para", final_text, re.IGNORECASE):
                                 logger.warning(f"⚠️ GPT prometió reprogramación en texto sin haber llamado reschedule_appointment. Sanitizando respuesta...")
                                 final_text = re.sub(
@@ -761,7 +748,6 @@ class AIService:
                         r"\banulada\s+exitosamente\b"
                     ]
                     has_cancel_pattern = any(re.search(pat, final_text, re.IGNORECASE) for pat in cancellation_patterns)
-                    has_any_call = any(tc.function.name in ["cancel_appointment", "reschedule_appointment"] for tc in response_message.tool_calls)
 
                     if has_cancel_pattern and not has_any_call:
                         logger.warning(f"⚠️ GPT afirmó cancelación en texto sin haber llamado cancel_appointment ni reschedule_appointment. Ejecutando cancelación de seguridad para {sender_wa_id}...")
