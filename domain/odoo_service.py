@@ -876,13 +876,13 @@ class OdooService:
                     {"fields": ["id", "name", "spa_specialties", "resource_calendar_id", "spa_bio"]}
                 )
             
-            # 2. Obtener nombres de productos/servicios para mapear especialidades con sus emojis
+            # 2. Obtener nombres de productos/servicios para mapear especialidades con sus emojis y precios reales
             prods = self._execute(
                 "product.template", "search_read",
                 [],
-                {"fields": ["id", "name", "spa_emoji"]}
+                {"fields": ["id", "name", "spa_emoji", "list_price"]}
             )
-            prod_map = {p["id"]: {"name": p["name"], "emoji": p.get("spa_emoji") or "💅"} for p in prods or [] if p.get("id") and p.get("name")}
+            prod_map = {p["id"]: {"name": p["name"], "emoji": p.get("spa_emoji") or "💅", "price": p.get("list_price") or 0.0} for p in prods or [] if p.get("id") and p.get("name")}
             
             # 3. Obtener los horarios de atención (attendances) de los calendarios asociados
             calendar_ids = list(set(
@@ -921,7 +921,14 @@ class OdooService:
                 if emp_name.lower() in SKIP_NAMES:
                     continue
                 specialty_ids = emp.get("spa_specialties", []) or []
-                specialty_names = [f"{prod_map[sid]['emoji']} {prod_map[sid]['name']}" for sid in specialty_ids if sid in prod_map]
+                specialty_names = []
+                for sid in specialty_ids:
+                    if sid in prod_map:
+                        p_info = prod_map[sid]
+                        emoji = p_info["emoji"] or "💅"
+                        name = p_info["name"]
+                        price = p_info.get("price", 0.0)
+                        specialty_names.append(f"{emoji} {name} (precio: ${int(price):,})".replace(",", "."))
                 # Excluir empleados sin ninguna especialidad asignada (no son profesionales activos)
                 if not specialty_names:
                     continue
