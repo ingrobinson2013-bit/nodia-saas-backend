@@ -354,12 +354,33 @@ Proximos 14 dias disponibles:
 - Si no dice hora -> pregunta: "A que horas le queda bien?"
 - NUNCA ofrezcas fechas pasadas
 
+CANCELACIÓN Y ELIMINACIÓN DE CITAS
+REGLA MANDATORIA INVIOLABLE:
+1. Triggers de intención de CANCELACIÓN (solo estos indican cancelar):
+   - "cancelar", "eliminar cita", "anular", "no puedo ir", "no voy a ir"
+2. Cuando el cliente solicite cancelar usando alguno de estos triggers:
+   DEBES LLAMAR OBLIGATORIAMENTE Y EN PRIMER LUGAR A LA TOOL `get_my_appointments` para consultar las citas reales activas en Odoo.
+3. Si el cliente tiene 1 o más citas:
+   Muéstrale los detalles de la cita con ID, Servicio, Profesional, Fecha y Hora, y pregúntale cuál desea cancelar.
+4. Cuando el cliente confirme la cancelación (diciendo "sí", "confirmar", "👍", "ok", "cancelar") o indique cuál cita desea cancelar:
+   DEBES LLAMAR INMEDIATAMENTE A LA TOOL `cancel_appointment` pasando el `cita_id` numérico de la cita.
+   CRÍTICO: NUNCA respondas "Tu cita fue cancelada" sin ejecutar la tool `cancel_appointment` en esa misma respuesta. La ejecución de la herramienta es OBLIGATORIA para borrar el evento de Odoo.
+
+REPROGRAMACIÓN DE CITAS
+REGLA MANDATORIA INVIOLABLE:
+1. Triggers de intención de REPROGRAMACIÓN (indican reprogramar, flujo diferente a cancelar):
+   - "reprogramar", "cambiar cita", "cambiar fecha", "cambiar hora", "mover cita", "reagendar", "otra fecha", "otro día", "otro horario"
+2. Cuando el cliente solicite reprogramar usando alguno de estos triggers:
+   - PRIMERO llama a `get_my_appointments` para obtener las citas activas del cliente.
+3. Muéstrale la cita actual con Servicio, Profesional, Fecha y Hora. Pregúntale a qué nueva fecha y hora futura le gustaría reprogramarla.
+4. Cuando el cliente proporcione o confirme la nueva fecha y hora futura (diciendo "sí", "confirmar", "👍", "ok", "dale"):
+   DEBES LLAMAR INMEDIATAMENTE A LA TOOL `reschedule_appointment` con el `cita_id`, `nueva_fecha` y `nueva_hora`.
+   CRÍTICO: NUNCA digas que la cita fue reagendada sin haber ejecutado la tool `reschedule_appointment` en esa misma respuesta.
+
 ACCIONES CRM (emitir como JSON puro al final de tu respuesta)
 Cita confirmada -> {{"action":"BOOK","name":"","service":"","price":"","date":"YYYY-MM-DD","time":"HH:MM","branch_id":"{tenant_id}"}}
 Interes sin agendar -> {{"action":"LEAD","name":"","interest":"","notes":"","branch_id":"{tenant_id}"}}
 Queja -> {{"action":"PQR","name":"","issue":"","priority":"alta/media/baja","branch_id":"{tenant_id}"}}
-Escalar humano -> {{"action":"ESCALATE","name":"","reason":"","branch_id":"{tenant_id}"}}
-Cancelar cita -> {{"action":"CANCEL","name":"","date":"YYYY-MM-DD","time":"HH:MM","branch_id":"{tenant_id}"}}
-Reagendar cita -> {{"action":"RESCHEDULE","name":"","old_date":"YYYY-MM-DD","old_time":"HH:MM","new_date":"YYYY-MM-DD","new_time":"HH:MM","branch_id":"{tenant_id}"}}"""
+Escalar humano -> {{"action":"ESCALATE","name":"","reason":"","branch_id":"{tenant_id}"}}"""
 
     return base_prompt.strip() + dynamic_block

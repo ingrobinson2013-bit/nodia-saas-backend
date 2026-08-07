@@ -75,16 +75,24 @@ class OdooService:
         self.db  = (db or "").strip()
         self.user = (user or "").strip()
         self.api_key = (api_key or "").strip()
-        self.uid = None
+        self._uid = None
         self.professional_field_name = "professional_id"  # por defecto
         if not self.url:
             logger.error("❌ OdooService: odoo_url vacía o inválida — skip auth")
             return
-        if self.db and self.user and self.api_key:
+
+    @property
+    def uid(self):
+        if self._uid is None and self.db and self.user and self.api_key:
             try:
                 self._authenticate()
             except Exception as e:
-                logger.warning(f"Odoo: no se pudo autenticar usuario — solo endpoints públicos estarán disponibles: {e}")
+                logger.warning(f"Odoo: error en Lazy Auth: {e}")
+        return self._uid
+
+    @uid.setter
+    def uid(self, value):
+        self._uid = value
 
     def _jsonrpc(self, service: str, method: str, args: list) -> dict:
         """Ejecuta una llamada JSON-RPC al endpoint /jsonrpc de Odoo."""
@@ -126,32 +134,29 @@ class OdooService:
             )
             if not result or not isinstance(result, int) or result <= 0:
                 raise Exception(f"Auth fallida — resultado: {result}")
-            self.uid = result
-            logger.info(f"✅ Odoo JSON-RPC autenticado. uid={self.uid} db={self.db}")
+            self._uid = result
+            logger.info(f"✅ Odoo JSON-RPC autenticado. uid={self._uid} db={self.db}")
 
             # Detectar dinámicamente si el campo de profesional es 'professional_id' o 'spa_professional_id'
-            # IMPORTANTE: fields_get NO lanza excepción cuando un campo no existe — devuelve {} (dict vacío).
-            # Por eso reseteamos a None primero y consultamos ambos campos en una sola llamada.
-            self.professional_field_name = None
+            self.professional_field_name = "professional_id"  # por defecto
             try:
-                fields = self._execute(
-                    "calendar.event", "fields_get",
-                    [["professional_id", "spa_professional_id"]],
-                    {"attributes": ["type"]}
-                )
-                if "professional_id" in fields:
-                    self.professional_field_name = "professional_id"
-                elif "spa_professional_id" in fields:
-                    self.professional_field_name = "spa_professional_id"
-                else:
-                    logger.warning("calendar.event: no se encontró ni 'professional_id' ni 'spa_professional_id' — se omitirá el profesional al crear citas")
+                # Usar _jsonrpc directamente para evitar recursión infinita
+                full_args = [self.db, self._uid, self.api_key, "calendar.event", "fields_get", [["professional_id", "spa_professional_id"]], {"attributes": ["type"]}]
+                fields = self._jsonrpc(service="object", method="execute_kw", args=full_args)
+                if fields and isinstance(fields, dict):
+                    if "professional_id" in fields:
+                        self.professional_field_name = "professional_id"
+                    elif "spa_professional_id" in fields:
+                        self.professional_field_name = "spa_professional_id"
+                    else:
+                        logger.warning("calendar.event: no se encontró ni 'professional_id' ni 'spa_professional_id' — se omitirá el profesional al crear citas")
             except Exception as e_field:
                 logger.warning(f"No se pudo detectar el campo de profesional en calendar.event: {e_field}")
             logger.info(f"Odoo: Campo de profesional detectado y configurado como: '{self.professional_field_name}'")
 
         except Exception as e:
             logger.error(f"❌ Error autenticando en Odoo: {e}")
-            self.uid = None
+            self._uid = None
 
     def _execute(self, model: str, method: str, args: list, kwargs: dict = None) -> any:
         """Wrapper para execute_kw."""
@@ -829,9 +834,6 @@ class OdooService:
 
     def get_professionals(self) -> list:
         """Devuelve los profesionales activos en Odoo con sus especialidades y horarios dinámicos (con caché simple)."""
-        if not self.uid:
-            return []
-        
         global _PROFESSIONALS_CACHE, _PROFESSIONALS_CACHE_TIME
         if '_PROFESSIONALS_CACHE' not in globals():
             _PROFESSIONALS_CACHE = {}
@@ -843,6 +845,9 @@ class OdooService:
         if cache_key in _PROFESSIONALS_CACHE and cache_key in _PROFESSIONALS_CACHE_TIME:
             if (now - _PROFESSIONALS_CACHE_TIME[cache_key]).total_seconds() < 1800:
                 return _PROFESSIONALS_CACHE[cache_key]
+
+        if not self.uid:
+            return []
 
         try:
             # 0. Obtener la compañía y su calendario por defecto
