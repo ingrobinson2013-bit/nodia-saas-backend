@@ -131,6 +131,7 @@ class MessageHandler:
                 citas_cliente=citas_cliente,
                 citas_negocio=citas_negocio,
                 profesionales=profesionales,
+                sender_name=sender_name or "",
             )
         else:
             system_prompt = build_system_prompt(
@@ -139,7 +140,9 @@ class MessageHandler:
                 citas_cliente=citas_cliente,
                 citas_negocio=citas_negocio,
                 profesionales=profesionales,
+                sender_name=sender_name or "",
             )
+
 
         # -- 10. Llamar a la IA (con tool calling para check/create appointment) --
         ai = AIService()
@@ -249,10 +252,21 @@ class MessageHandler:
                 logger.error(f"Error persistiendo citas_log: {e}")
 
 
-        # -- 13. Otras acciones CRM via JSON en texto (ESCALATE/CANCEL/RESCHEDULE) --
-        # BOOK ya fue manejado por ai_service via OpenAI tool calling
+        # -- 13. Otras acciones CRM via JSON en texto (ESCALATE/CANCEL/RESCHEDULE/BOOK fallback) --
         crm_action = self._extract_crm_action(response_text)
-        clean_response = re.sub(r'\{"action".*?\}', '', response_text, flags=re.DOTALL).strip()
+        clean_response = self._clean_json_from_text(response_text)
+
+        # Fallback de booking si GPT emitió el JSON en texto pero no llamó a la tool de booking
+        if not booking_data and crm_action and crm_action.get("action") == "BOOK":
+            booking_data = {
+                "cliente_nombre": crm_action.get("name") or sender_name or sender_wa_id,
+                "servicio": crm_action.get("service", "Servicio"),
+                "precio": crm_action.get("price", ""),
+                "fecha": crm_action.get("date", ""),
+                "hora": crm_action.get("time", "10:00"),
+                "odoo_event_id": 0
+            }
+            logger.info(f"[{tenant['nombre']}] Booking recuperado de fallback JSON: {booking_data}")
 
         if crm_action:
             action = crm_action.get("action")
@@ -338,21 +352,23 @@ class MessageHandler:
         else:
             logger.info(f"[{tenant['nombre']}] Sin accion CRM en el response")
 
-        # -- 14. Enviar respuesta al cliente ----------------------------------
-        await wa.send_text(to=sender_wa_id, message=clean_response or response_text)
+        # -- 14. Enviar respuesta limpia al cliente (sin JSONs visibles) ------
+        final_message_to_send = clean_response or response_text
+        await wa.send_text(to=sender_wa_id, message=final_message_to_send)
         await wa.mark_as_read(message_id)
 
-        # -- 15. Actualizar historial en Supabase ----------------------------
+        # -- 15. Actualizar historial limpio en Supabase ----------------------
         new_history = history + [
             user_message_entry,
             {
                 "role": "assistant",
-                "content": response_text,
+                "content": final_message_to_send,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         ]
         new_history = new_history[-(MAX_HISTORY * 2):]
         chat_session_repo.update_history(session["id"], new_history)
+
 
 
         # -- 16. Enviar notificación de correo para lead calificado (exclusivo ventas) --
@@ -384,22 +400,40 @@ class MessageHandler:
     # HELPERS
     # -------------------------------------------------------------------------
 
-    def _extract_crm_action(self, text: str) -> dict | None:
+    def _clean_json_from_text(self, text: str) -> str:
+        """
+        Limpia cualquier bloque JSON (BOOK, ESCALATE, LEAD, PQR, CANCEL, RESCHEDULE)
+        del texto visible enviado al cliente o guardado en historial.
+        """
+        if not text:
+            return ""
+        # 1. Remover bloques de código markdown ```json { ... } ```
+        cleaned = re.sub(r'```(?:json)?\s*\{.*?\}\s*```', '', text, flags=re.DOTALL | re.IGNORECASE)
+        # 2. Remover objetos JSON con "action": "..."
+        cleaned = re.sub(r'\{\s*"action"\s*:\s*"(?:BOOK|LEAD|PQR|ESCALATE|CANCEL|RESCHEDULE)".*?\}', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+        # 3. Remover objetos JSON residuales con "branch_id"
+        cleaned = re.sub(r'\{[^{}]*"branch_id"[^{}]*\}', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+        # 4. Normalizar saltos de línea múltiples
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+        return cleaned
 
+    def _extract_crm_action(self, text: str) -> dict | None:
         """
-        Extrae acciones CRM en JSON del texto (ESCALATE, CANCEL, RESCHEDULE, LEAD, PQR).
-        BOOK ya NO se maneja aqui — lo gestiona ai_service via OpenAI tool calling.
+        Extrae acciones CRM en JSON del texto (BOOK, ESCALATE, CANCEL, RESCHEDULE, LEAD, PQR).
         """
+        if not text:
+            return None
         try:
             match = re.search(
-                r'\{"action"\s*:\s*"(LEAD|PQR|ESCALATE|CANCEL|RESCHEDULE)".*?\}',
-                text, re.DOTALL
+                r'\{\s*"action"\s*:\s*"(BOOK|LEAD|PQR|ESCALATE|CANCEL|RESCHEDULE)".*?\}',
+                text, re.DOTALL | re.IGNORECASE
             )
             if match:
                 return json.loads(match.group(0))
         except Exception as e:
             logger.warning(f"No se pudo parsear accion CRM: {e}")
         return None
+
 
     # ────────────────────────────────────────────────────────
     # EMAIL: Notificación de CITA RESERVADA al dueño del negocio
