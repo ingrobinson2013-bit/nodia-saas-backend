@@ -694,44 +694,57 @@ class OdooService:
                 else:
                     slots = data.get("slots", [])
             
-            # Filtrar solapamientos con citas existentes para TODOS los profesionales (sin excepciones)
+            # Filtrar solapamientos con citas existentes:
+            # - Jose Roa / Jose: SÍ puede atender citas paralelas (regla de negocio del negocio).
+            # - Todos los demás profesionales: NUNCA pueden tener citas simultáneas ni solapadas.
             if slots and professional_id:
                 try:
-                    dur_mins = self.get_service_duration_minutes(service_id) if service_id else 60
-                    citas = self.check_availability(date_str, professional_id=professional_id)
+                    profs = self.get_professionals()
+                    prof_name = ""
+                    for p in profs:
+                        if int(p.get("id", 0)) == int(professional_id):
+                            prof_name = p.get("name", "")
+                            break
                     
-                    for slot in slots:
-                        if not isinstance(slot, dict) or not slot.get("available"):
-                            continue
+                    is_jose = "jose" in prof_name.lower()
+                    
+                    # Si NO es Jose, inhabilitar cualquier slot que se solape con citas existentes
+                    if not is_jose:
+                        dur_mins = self.get_service_duration_minutes(service_id) if service_id else 60
+                        citas = self.check_availability(date_str, professional_id=professional_id)
                         
-                        slot_time_str = slot.get("time")
-                        if not slot_time_str:
-                            continue
-                        
-                        sh, sm = map(int, slot_time_str.split(":"))
-                        slot_start_min = sh * 60 + sm
-                        slot_end_min = slot_start_min + dur_mins
-                        
-                        for cita in citas:
-                            start_str = cita.get("inicio_bogota", "")
-                            stop_str = cita.get("fin_bogota", "")
+                        for slot in slots:
+                            if not isinstance(slot, dict) or not slot.get("available"):
+                                continue
                             
-                            # Extraer la hora "HH:MM" de "YYYY-MM-DD HH:MM"
-                            if " " in start_str:
-                                start_str = start_str.split(" ")[1]
-                            if " " in stop_str:
-                                stop_str = stop_str.split(" ")[1]
+                            slot_time_str = slot.get("time")
+                            if not slot_time_str:
+                                continue
+                            
+                            sh, sm = map(int, slot_time_str.split(":"))
+                            slot_start_min = sh * 60 + sm
+                            slot_end_min = slot_start_min + dur_mins
+                            
+                            for cita in citas:
+                                start_str = cita.get("inicio_bogota", "")
+                                stop_str = cita.get("fin_bogota", "")
                                 
-                            if start_str and stop_str:
-                                sth, stm = map(int, start_str.split(":"))
-                                sph, spm = map(int, stop_str.split(":"))
-                                cita_start_min = sth * 60 + stm
-                                cita_stop_min = sph * 60 + spm
-                                
-                                # Si hay solapamiento entre [slot_start, slot_end) y [cita_start, cita_stop)
-                                if max(slot_start_min, cita_start_min) < min(slot_end_min, cita_stop_min):
-                                    slot["available"] = False
-                                    break
+                                # Extraer la hora "HH:MM" de "YYYY-MM-DD HH:MM"
+                                if " " in start_str:
+                                    start_str = start_str.split(" ")[1]
+                                if " " in stop_str:
+                                    stop_str = stop_str.split(" ")[1]
+                                    
+                                if start_str and stop_str:
+                                    sth, stm = map(int, start_str.split(":"))
+                                    sph, spm = map(int, stop_str.split(":"))
+                                    cita_start_min = sth * 60 + stm
+                                    cita_stop_min = sph * 60 + spm
+                                    
+                                    # Si hay solapamiento entre [slot_start, slot_end) y [cita_start, cita_stop)
+                                    if max(slot_start_min, cita_start_min) < min(slot_end_min, cita_stop_min):
+                                        slot["available"] = False
+                                        break
                 except Exception as e_filter:
                     logger.error(f"Error filtrando slots paralelos para prof {professional_id}: {e_filter}")
             
