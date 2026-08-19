@@ -360,6 +360,24 @@ class AIService:
 
         try:
             if odoo_config and odoo_config.get("url"):
+                from domain.odoo_service import OdooService
+                odoo = OdooService(
+                    url=odoo_config["url"],
+                    db=odoo_config["db"],
+                    user=odoo_config["user"],
+                    api_key=odoo_config["api_key"],
+                )
+
+                # Cargar configuración del horario del negocio desde Supabase usando el repositorio
+                horario_comercial = ""
+                if tenant_id:
+                    try:
+                        tc_res = tenant_config_repo.get_by_tenant_id(tenant_id)
+                        if tc_res:
+                            horario_comercial = tc_res.get("horario", "")
+                    except Exception as tc_err:
+                        logger.warning(f"No se pudo cargar el horario del tenant {tenant_id} en ai_service: {tc_err}")
+
                 tools = [
                     TOOL_CHECK_AVAILABILITY,
                     TOOL_CREATE_APPOINTMENT,
@@ -383,24 +401,6 @@ class AIService:
 
                 # ── Ciclo de tool calling ──────────────────────────────────
                 if response_message.tool_calls:
-                    from domain.odoo_service import OdooService
-                    odoo = OdooService(
-                        url=odoo_config["url"],
-                        db=odoo_config["db"],
-                        user=odoo_config["user"],
-                        api_key=odoo_config["api_key"],
-                    )
-
-                    # Cargar configuración del horario del negocio desde Supabase usando el repositorio
-                    horario_comercial = ""
-                    if tenant_id:
-                        try:
-                            tc_res = tenant_config_repo.get_by_tenant_id(tenant_id)
-                            if tc_res:
-                                horario_comercial = tc_res.get("horario", "")
-                        except Exception as tc_err:
-                            logger.warning(f"No se pudo cargar el horario del tenant {tenant_id} en ai_service: {tc_err}")
-
                     iteration = 0
                     max_iterations = 3
 
@@ -408,6 +408,7 @@ class AIService:
                         curr_msg = response.choices[0].message
                         if not curr_msg.tool_calls:
                             break
+
 
                         messages.append(curr_msg)
 
@@ -758,16 +759,17 @@ class AIService:
                                     flags=re.IGNORECASE
                                 )
 
-                    # Safety check ampliado: Si el texto afirma explícitamente haber cancelado la cita pero no se llamó a la tool de cancelación/reprogramación
+                    # Safety check ampliado: Si el texto afirma explícitamente haber cancelado la cita pero no se llamó a la tool de cancelación
                     cancellation_patterns = [
-                        r"\bcita\s+(?:ha sido\s+)?(?:cancelada|anulada|eliminada|borrada)\b",
-                        r"\b(?:hemos|he|procedo a)\s+(?:cancelar|anular|eliminar|borrar)\s+(?:la|tu)\s+cita\b",
-                        r"\bcancelada\s+exitosamente\b",
-                        r"\banulada\s+exitosamente\b"
+                        r"\b(?:tu|la)?\s*cita\s+(?:ha sido|fue|queda|está)?\s*(?:cancelada|anulada|eliminada|borrada)\b",
+                        r"\b(?:hemos|he|procedo a|procedemos a)\s+(?:cancelar|anular|eliminar|borrar)\s+(?:la|tu)?\s*cita\b",
+                        r"\b(?:cita\s+)?cancelada\s+(?:correctamente|exitosamente|con éxito)\b",
+                        r"\b(?:cita\s+)?anulada\s+(?:correctamente|exitosamente|con éxito)\b",
+                        r"\bcita\s+(?:ha sido\s+)?cancelada\b",
                     ]
                     has_cancel_pattern = any(re.search(pat, final_text, re.IGNORECASE) for pat in cancellation_patterns)
 
-                    if has_cancel_pattern and not has_any_call:
+                    if has_cancel_pattern and not has_any_call and sender_wa_id:
                         logger.warning(f"⚠️ GPT afirmó cancelación en texto sin haber llamado cancel_appointment ni reschedule_appointment. Ejecutando cancelación de seguridad para {sender_wa_id}...")
                         try:
                             citas_res = odoo.get_client_appointments(sender_wa_id or "")
@@ -779,10 +781,12 @@ class AIService:
                                     if tenant_id:
                                         try:
                                             appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(cid))
-                                            appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
                                         except Exception:
                                             pass
-
+                            # Fallback directo en Odoo por teléfono
+                            odoo.cancel_appointment_spa(phone=sender_wa_id)
+                            if tenant_id:
+                                appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
                         except Exception as fe:
                             logger.error(f"Error en safety cancel: {fe}")
 
@@ -803,10 +807,11 @@ class AIService:
 
                 # Safety check para respuesta de texto plano
                 cancellation_patterns = [
-                    r"\bcita\s+(?:ha sido\s+)?(?:cancelada|anulada|eliminada|borrada)\b",
-                    r"\b(?:hemos|he|procedo a)\s+(?:cancelar|anular|eliminar|borrar)\s+(?:la|tu)\s+cita\b",
-                    r"\bcancelada\s+exitosamente\b",
-                    r"\banulada\s+exitosamente\b"
+                    r"\b(?:tu|la)?\s*cita\s+(?:ha sido|fue|queda|está)?\s*(?:cancelada|anulada|eliminada|borrada)\b",
+                    r"\b(?:hemos|he|procedo a|procedemos a)\s+(?:cancelar|anular|eliminar|borrar)\s+(?:la|tu)?\s*cita\b",
+                    r"\b(?:cita\s+)?cancelada\s+(?:correctamente|exitosamente|con éxito)\b",
+                    r"\b(?:cita\s+)?anulada\s+(?:correctamente|exitosamente|con éxito)\b",
+                    r"\bcita\s+(?:ha sido\s+)?cancelada\b",
                 ]
                 has_cancel_pattern = any(re.search(pat, final_text, re.IGNORECASE) for pat in cancellation_patterns)
 
@@ -822,14 +827,17 @@ class AIService:
                                 if tenant_id:
                                     try:
                                         appointment_log_repo.cancel_appointment_by_odoo_id(tenant_id, int(cid))
-                                        appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
                                     except Exception:
                                         pass
-
+                        # Fallback directo en Odoo por teléfono
+                        odoo.cancel_appointment_spa(phone=sender_wa_id)
+                        if tenant_id:
+                            appointment_log_repo.cancel_all_appointments_by_phone(tenant_id, sender_wa_id)
                     except Exception as fe:
                         logger.error(f"Error en safety cancel: {fe}")
 
                 return final_text, None
+
 
             else:
                 # Sin Odoo: llamada directa sin tools
