@@ -177,9 +177,10 @@ TOOL_CHECK_AVAILABILITY = {
     "function": {
         "name": "check_availability",
         "description": (
-            "Consulta las citas ocupadas en el calendario del negocio para una fecha específica. "
-            "Llama esta función cuando el cliente proponga una fecha/hora para verificar disponibilidad. "
-            "Soporta filtros opcionales de profesional y servicio si ya se conocen o fueron solicitados."
+            "Consulta las citas ocupadas y slots disponibles en el calendario de Odoo para una fecha específica. "
+            "Llama esta función CADA VEZ que el cliente proponga, confirme o consulte una fecha u hora. "
+            "CRÍTICO: Incluye service_name y/o service_id (ej: 362 para Combo Manos & Pies, 18 para Balayage) "
+            "para que Odoo calcule la duración real del servicio y no provoque solapamientos de citas."
         ),
         "parameters": {
             "type": "object",
@@ -194,7 +195,11 @@ TOOL_CHECK_AVAILABILITY = {
                 },
                 "service_name": {
                     "type": "string",
-                    "description": "Nombre opcional del servicio solicitado (ej: Corte Caballero Tendencia)"
+                    "description": "Nombre del servicio solicitado (ej: Combo Manos & Pies, Balayage, Keratina)"
+                },
+                "service_id": {
+                    "type": "integer",
+                    "description": "ID numérico de Odoo del servicio si se conoce (ej: 362, 198, 18, 20, 17, 19)"
                 }
             },
             "required": ["date_str"]
@@ -417,6 +422,7 @@ class AIService:
                                 date_str = fn_args.get("date_str", "")
                                 prof_name = fn_args.get("professional_name")
                                 serv_name = fn_args.get("service_name")
+                                serv_id_arg = fn_args.get("service_id")
                                 
                                 # Auto-inferir profesional si el cliente tiene cita activa y no envió professional_name
                                 if not prof_name and sender_wa_id:
@@ -430,7 +436,16 @@ class AIService:
                                         logger.warning(f"No se pudo inferir profesional desde cita activa: {ex_inf}")
 
                                 prof_id = odoo.find_professional_id(prof_name) if prof_name else None
-                                serv_id = odoo.find_service_id(serv_name) if serv_name else None
+                                
+                                # Resolver service_id numérico de Odoo
+                                serv_id = None
+                                if serv_id_arg:
+                                    try:
+                                        serv_id = int(serv_id_arg)
+                                    except (ValueError, TypeError):
+                                        serv_id = None
+                                if not serv_id and serv_name:
+                                    serv_id = odoo.find_service_id(serv_name)
                                 
                                 dia_abierto = True
                                 if horario_comercial:
@@ -460,15 +475,18 @@ class AIService:
                                     if prof_id:
                                         raw_slots = odoo.get_available_slots(date_str, professional_id=prof_id, service_id=serv_id)
                                         avail_times = [s.get("time") for s in raw_slots if isinstance(s, dict) and s.get("available")]
+                                        dur_min_val = odoo.get_service_duration_minutes(serv_id) if serv_id else 60
                                         slots_info = {
                                             "profesional": prof_name,
                                             "professional_id": prof_id,
+                                            "service_id": serv_id,
+                                            "duracion_minutos": dur_min_val,
                                             "horas_libres": avail_times
                                         }
                                         tool_result = json.dumps(slots_info, ensure_ascii=False)
                                     else:
                                         tool_result = json.dumps(result, ensure_ascii=False)
-                                logger.info(f"Odoo check_availability: {date_str} prof={prof_name}({prof_id}) → {len(result) if (ofrece_servicio and dia_abierto) else 0} eventos")
+                                logger.info(f"Odoo check_availability: {date_str} prof={prof_name}({prof_id}) serv={serv_name}({serv_id}) → {len(result) if (ofrece_servicio and dia_abierto) else 0} eventos")
 
                             elif fn_name == "get_my_appointments":
                                 client_phone = fn_args.get("phone", sender_wa_id or "")

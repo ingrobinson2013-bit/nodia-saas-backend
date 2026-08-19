@@ -365,11 +365,7 @@ class OdooService:
             stop_words = {"y", "de", "con", "para", "del", "el", "la", "los", "las", "un", "una", "unos", "unas"}
             words = [w for w in clean.split() if len(w) >= 3 and w not in stop_words]
             
-            prods = self._execute(
-                "product.template", "search_read",
-                [],
-                {"fields": ["id", "name"]}
-            )
+            prods = self.get_services()
             
             # 1. Coincidencia exacta o contenida (máxima prioridad)
             for p in prods or []:
@@ -604,9 +600,64 @@ class OdooService:
             "message": "Tu cita ha sido cancelada correctamente." if unlink_ok else "No se pudo cancelar la cita."
         }
 
+    def get_services(self) -> list[dict]:
+        """
+        Obtiene todos los productos/servicios activos de Odoo con sus IDs, nombres,
+        duraciones reales (spa_duration) y precios.
+        """
+        global _SERVICES_CACHE, _SERVICES_CACHE_TIME
+        if '_SERVICES_CACHE' not in globals():
+            _SERVICES_CACHE = {}
+            _SERVICES_CACHE_TIME = {}
+            
+        now = datetime.now()
+        cache_key = f"{self.url}_{self.db}"
+        if cache_key in _SERVICES_CACHE and cache_key in _SERVICES_CACHE_TIME:
+            if (now - _SERVICES_CACHE_TIME[cache_key]).total_seconds() < 1800:
+                return _SERVICES_CACHE[cache_key]
+
+        if not self.uid:
+            return []
+
+        try:
+            prods = self._execute(
+                "product.template", "search_read",
+                [[["active", "=", True]]],
+                {"fields": ["id", "name", "spa_duration", "list_price", "spa_emoji"]}
+            )
+            result = []
+            for p in prods or []:
+                dur_hours = p.get("spa_duration") or 1.0
+                dur_mins = int(round(float(dur_hours) * 60)) if dur_hours else 60
+                result.append({
+                    "id": p["id"],
+                    "name": p.get("name", ""),
+                    "duration_hours": dur_hours,
+                    "duration_minutes": dur_mins,
+                    "price": p.get("list_price") or 0.0,
+                    "emoji": p.get("spa_emoji") or "💅"
+                })
+            _SERVICES_CACHE[cache_key] = result
+            _SERVICES_CACHE_TIME[cache_key] = now
+            return result
+        except Exception as e:
+            logger.error(f"Error consultando servicios en Odoo: {e}")
+            return []
+
+    def get_service_duration_minutes(self, service_id: int) -> int:
+        """Retorna la duración en minutos de un servicio a partir de su ID en Odoo."""
+        if not service_id:
+            return 60
+        services = self.get_services()
+        for s in services:
+            if int(s.get("id", 0)) == int(service_id):
+                return s.get("duration_minutes", 60)
+        return 60
+
     def get_available_slots(self, date_str: str, professional_id: int = None, service_id: int = None) -> list:
         """
         Consulta slots disponibles llamando al endpoint POST /api/spa/slots (usando JSON-RPC 2.0).
+        CRÍTICO: Siempre incluye service_id para que Odoo calcule la duración real del servicio y no caiga a 1h por defecto.
         """
         if not self.url:
             return []
@@ -643,53 +694,44 @@ class OdooService:
                 else:
                     slots = data.get("slots", [])
             
-            # Filtrar citas paralelas para profesionales distintos a Jose (no permitir traslape)
+            # Filtrar solapamientos con citas existentes para TODOS los profesionales (sin excepciones)
             if slots and professional_id:
                 try:
-                    # 1. Verificar si el profesional solicitado es Jose
-                    profs = self.get_professionals()
-                    prof_name = ""
-                    for p in profs:
-                        if int(p.get("id", 0)) == int(professional_id):
-                            prof_name = p.get("name", "")
-                            break
+                    dur_mins = self.get_service_duration_minutes(service_id) if service_id else 60
+                    citas = self.check_availability(date_str, professional_id=professional_id)
                     
-                    is_jose = "jose" in prof_name.lower()
-                    
-                    # 2. Si no es Jose, inhabilitamos los slots que se traslapen con citas existentes
-                    if not is_jose:
-                        citas = self.check_availability(date_str, professional_id=professional_id)
-                        for slot in slots:
-                            if not isinstance(slot, dict) or not slot.get("available"):
-                                continue
+                    for slot in slots:
+                        if not isinstance(slot, dict) or not slot.get("available"):
+                            continue
+                        
+                        slot_time_str = slot.get("time")
+                        if not slot_time_str:
+                            continue
+                        
+                        sh, sm = map(int, slot_time_str.split(":"))
+                        slot_start_min = sh * 60 + sm
+                        slot_end_min = slot_start_min + dur_mins
+                        
+                        for cita in citas:
+                            start_str = cita.get("inicio_bogota", "")
+                            stop_str = cita.get("fin_bogota", "")
                             
-                            slot_time_str = slot.get("time")
-                            if not slot_time_str:
-                                continue
-                            
-                            sh, sm = map(int, slot_time_str.split(":"))
-                            slot_min = sh * 60 + sm
-                            
-                            for cita in citas:
-                                start_str = cita.get("inicio_bogota", "")
-                                stop_str = cita.get("fin_bogota", "")
+                            # Extraer la hora "HH:MM" de "YYYY-MM-DD HH:MM"
+                            if " " in start_str:
+                                start_str = start_str.split(" ")[1]
+                            if " " in stop_str:
+                                stop_str = stop_str.split(" ")[1]
                                 
-                                # Extraer la hora "HH:MM" de "YYYY-MM-DD HH:MM"
-                                if " " in start_str:
-                                    start_str = start_str.split(" ")[1]
-                                if " " in stop_str:
-                                    stop_str = stop_str.split(" ")[1]
-                                    
-                                if start_str and stop_str:
-                                    sth, stm = map(int, start_str.split(":"))
-                                    sph, spm = map(int, stop_str.split(":"))
-                                    start_min = sth * 60 + stm
-                                    stop_min = sph * 60 + spm
-                                    
-                                    # Si el inicio del slot cae dentro del rango [inicio, fin) de la cita
-                                    if start_min <= slot_min < stop_min:
-                                        slot["available"] = False
-                                        break
+                            if start_str and stop_str:
+                                sth, stm = map(int, start_str.split(":"))
+                                sph, spm = map(int, stop_str.split(":"))
+                                cita_start_min = sth * 60 + stm
+                                cita_stop_min = sph * 60 + spm
+                                
+                                # Si hay solapamiento entre [slot_start, slot_end) y [cita_start, cita_stop)
+                                if max(slot_start_min, cita_start_min) < min(slot_end_min, cita_stop_min):
+                                    slot["available"] = False
+                                    break
                 except Exception as e_filter:
                     logger.error(f"Error filtrando slots paralelos para prof {professional_id}: {e_filter}")
             
@@ -697,6 +739,7 @@ class OdooService:
         except Exception as e:
             logger.warning(f"No se pudo consultar /api/spa/slots ({url}) via JSON-RPC: {e}")
             return []
+
 
     def cancel_appointment(self, event_id: int) -> bool:
         """Elimina (unlink) por completo una cita en Odoo para liberar el espacio.
@@ -929,13 +972,31 @@ class OdooService:
                     {"fields": ["id", "name", "spa_specialties", "resource_calendar_id", "spa_bio"]}
                 )
             
-            # 2. Obtener nombres de productos/servicios para mapear especialidades con sus emojis y precios reales
+            # 2. Obtener nombres de productos/servicios para mapear especialidades con sus emojis, IDs, duraciones y precios reales
             prods = self._execute(
                 "product.template", "search_read",
                 [],
-                {"fields": ["id", "name", "spa_emoji", "list_price"]}
+                {"fields": ["id", "name", "spa_emoji", "list_price", "spa_duration"]}
             )
-            prod_map = {p["id"]: {"name": p["name"], "emoji": p.get("spa_emoji") or "💅", "price": p.get("list_price") or 0.0} for p in prods or [] if p.get("id") and p.get("name")}
+            prod_map = {}
+            for p in prods or []:
+                if p.get("id") and p.get("name"):
+                    dur_h = p.get("spa_duration") or 1.0
+                    dur_m = int(round(float(dur_h) * 60)) if dur_h else 60
+                    if dur_m >= 60:
+                        h_part = dur_m // 60
+                        m_part = dur_m % 60
+                        dur_str = f"{h_part}h" if m_part == 0 else f"{h_part}h {m_part}min"
+                    else:
+                        dur_str = f"{dur_m}min"
+                    prod_map[p["id"]] = {
+                        "id": p["id"],
+                        "name": p["name"],
+                        "emoji": p.get("spa_emoji") or "💅",
+                        "price": p.get("list_price") or 0.0,
+                        "duration": dur_str,
+                        "duration_minutes": dur_m
+                    }
             
             # 3. Obtener los horarios de atención (attendances) de los calendarios asociados
             calendar_ids = list(set(
@@ -981,7 +1042,10 @@ class OdooService:
                         emoji = p_info["emoji"] or "💅"
                         name = p_info["name"]
                         price = p_info.get("price", 0.0)
-                        specialty_names.append(f"{emoji} {name} (precio: ${int(price):,})".replace(",", "."))
+                        dur_text = p_info.get("duration", "1h")
+                        sid_val = p_info.get("id")
+                        specialty_names.append(f"{emoji} {name} (ID: {sid_val}, Duración: {dur_text}, Precio: ${int(price):,})".replace(",", "."))
+
                 # Excluir empleados sin ninguna especialidad asignada (no son profesionales activos)
                 if not specialty_names:
                     continue

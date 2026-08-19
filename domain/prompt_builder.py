@@ -183,9 +183,10 @@ DISPONIBILIDAD Y ASIGNACIÓN DE PROFESIONALES (REGLA MANDATORIA INVIOLABLE)
 - Cada objeto en `eventos_ocupados` indica a qué profesional pertenece en `profesional_nombre`. Un horario solo está ocupado para el profesional especificado en esa cita.
 
 - CRÍTICO: CADA vez que el cliente proporcione, elija, confirme o cambie una hora o fecha (ej: "a las 11:30 am", "mañana a las 4", "a las 10:00", "Ok bien"), DEBES ejecutar obligatoriamente la herramienta `check_availability` en ese mismo turno. NUNCA asumas, inventes ni le digas al cliente si un profesional está disponible o no disponible sin haber llamado a `check_availability` en esa misma respuesta para verificar los slots reales en Odoo.
+- CRÍTICO DE SERVICE_ID: Al llamar a `check_availability`, SIEMPRE incluye el `service_name` y el `service_id` numérico de Odoo del servicio solicitado (obtenido de la lista de servicios/especialidades de arriba). Sin el `service_id`, la duración en Odoo cae a 1 hora por defecto y provocará solapamientos en servicios largos (>1h) como Balayage (3h), Keratina (3h), Colorimetría (3h), Combos Manos & Pies (1h 30min), Uñas Acrílicas (1h 30min), etc.
 
 - Cuando el cliente pida una fecha y hora para un profesional específico:
-  1. Ejecuta la herramienta `check_availability` enviando `professional_name` de ese profesional.
+  1. Ejecuta la herramienta `check_availability` enviando `professional_name` de ese profesional y el `service_id` / `service_name`.
   2. Revisa la lista `horas_libres` (o `disponibilidad_por_profesional`) de ESE profesional específico en la respuesta de la tool.
   3. CRÍTICO: Si la hora pedida NO aparece en la lista de horas libres de ese profesional, NO prometas agendar ni preguntes "¿Confirma?".
      Informa de inmediato que ese profesional está ocupado a esa hora y ofrece los OTROS profesionales libres a esa hora o sugiere las horas libres de su profesional preferido.
