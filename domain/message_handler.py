@@ -50,9 +50,12 @@ class MessageHandler:
         self,
         phone_number_id: str,
         sender_wa_id: str,
-        message_text: str,
-        message_id: str,
+        message_text: str = None,
+        message_id: str = "",
         sender_name: str = None,
+        media_id: str = None,
+        media_mime_type: str = "audio/ogg",
+        msg_type: str = "text",
     ):
         # -- 1. Identificar tenant -------------------------------------------
         tenant = tenant_repo.get_by_phone_id(phone_number_id)
@@ -65,6 +68,75 @@ class MessageHandler:
             return
 
         tenant_id = tenant["tenant_id"]
+
+        # -- 1b. Procesar Nota de Voz / Audio si aplica ----------------------
+        if msg_type in ["audio", "voice"] or media_id:
+            wa_audio = WhatsAppService(
+                phone_number_id=tenant["wa_phone_id"],
+                access_token=tenant["wa_access_token"],
+            )
+            # Notificar al cliente de inmediato que la nota de voz se está procesando
+            try:
+                await wa_audio.send_text(
+                    to=sender_wa_id,
+                    message="🎙️ Recibí tu nota de voz, dame un momento mientras la escucho..."
+                )
+            except Exception as e_ack:
+                logger.warning(f"No se pudo enviar acuse de nota de voz a {sender_wa_id}: {e_ack}")
+
+            try:
+                # Descargar audio desde Meta Graph API
+                audio_bytes, mime = await wa_audio.download_media(media_id)
+
+                # Validar tamaño máximo (16MB límite WhatsApp)
+                if len(audio_bytes) > 16 * 1024 * 1024:
+                    await wa_audio.send_text(
+                        to=sender_wa_id,
+                        message="⚠️ La nota de voz es demasiado larga. Por favor envíala en partes más cortas o en texto."
+                    )
+                    return
+
+                # Transcribir con Whisper API
+                from domain.audio_service import AudioTranscriptionService
+                audio_svc = AudioTranscriptionService()
+                transcribed_text = await audio_svc.transcribe(audio_bytes, mime_type=mime)
+
+                if not transcribed_text or len(transcribed_text.strip()) < 2:
+                    await wa_audio.send_text(
+                        to=sender_wa_id,
+                        message="🔇 No pude entender claramente la nota de voz. ¿Podrías escribir tu mensaje por favor?"
+                    )
+                    return
+
+                message_text = transcribed_text
+                logger.info(f"[{tenant['nombre']}] 🎙️ Nota de voz transcrita exitosamente: '{message_text}'")
+
+                # Registrar trazabilidad en Supabase voice_transcriptions
+                try:
+                    from supabase import create_client
+                    from config import settings
+                    db_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+                    db_client.table("voice_transcriptions").insert({
+                        "phone": sender_wa_id,
+                        "media_id": media_id,
+                        "transcript": message_text,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }).execute()
+                except Exception as log_err:
+                    logger.debug(f"Log voice_transcriptions omitido (tabla pendiente): {log_err}")
+
+            except Exception as audio_err:
+                logger.error(f"Error procesando nota de voz de {sender_wa_id}: {audio_err}", exc_info=True)
+                await wa_audio.send_text(
+                    to=sender_wa_id,
+                    message="⚠️ Tuve un problema procesando tu nota de voz. ¿Podrías escribirme tu solicitud?"
+                )
+                return
+
+        if not message_text:
+            logger.info(f"[{tenant['nombre']}] Mensaje vacío después del procesamiento. Ignorado.")
+            return
+
         logger.info(f"[{tenant['nombre']}] Msg de {sender_wa_id}: {message_text[:60]}...")
 
         # -- 2. Recuperar o crear sesion -------------------------------------
@@ -83,6 +155,7 @@ class MessageHandler:
             logger.info(f"[{tenant['nombre']}] bot_mode=False para {sender_wa_id}. IA pausada.")
             chat_session_repo.update_history(session["id"], history + [user_message_entry])
             return
+
 
         # -- 5. Preparar historial para OpenAI --------------------------------
         history_context = history[-MAX_HISTORY:]

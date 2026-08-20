@@ -129,18 +129,26 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                         logger.info(f"⏭️  Interactive tipo '{inter_type}' no soportado")
                         continue
 
+                elif msg_type in ["audio", "voice"]:
+                    # Mensajes de nota de voz / audio
+                    audio_data = msg.get("audio") or msg.get("voice") or {}
+                    media_id = audio_data.get("id")
+                    media_mime_type = audio_data.get("mime_type", "audio/ogg")
+                    logger.info(f"🎙️ Nota de voz recibida: media_id='{media_id}' mime='{media_mime_type}'")
+                    message_text = None  # Se transcribirá en el handler
+
                 else:
                     logger.info(f"⏭️  Tipo '{msg_type}' no soportado aún")
                     continue
 
-                if not message_text:
-                    logger.info("⏭️  Mensaje vacío, ignorado")
+                if not message_text and not media_id:
+                    logger.info("⏭️  Mensaje vacío y sin media_id, ignorado")
                     continue
 
                 sender_wa_id = msg["from"]
                 message_id   = msg["id"]
 
-                logger.info(f"✉️  Procesando: '{message_text[:80]}' de {sender_wa_id} (nombre={sender_name})")
+                logger.info(f"✉️  Procesando: type={msg_type} de {sender_wa_id} (nombre={sender_name})")
 
                 # Procesar en background para responder 200 a Meta de inmediato
                 # Meta reintenta si no recibe 200 en < 5 segundos
@@ -151,7 +159,11 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                     message_text=message_text,
                     message_id=message_id,
                     sender_name=sender_name,
+                    media_id=media_id if msg_type in ["audio", "voice"] else None,
+                    media_mime_type=media_mime_type if msg_type in ["audio", "voice"] else None,
+                    msg_type=msg_type,
                 )
+
 
     return {"status": "ok"}
 
