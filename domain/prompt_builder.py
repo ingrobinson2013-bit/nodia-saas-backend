@@ -221,10 +221,12 @@ Proximos 14 dias:
 {calendario}
 Reglas:
 - "hoy" = {hoy_iso} / "manana" = {manana_iso}
-- "el sabado", "el lunes" -> busca el mas proximo en la lista
+- "el sabado", "el lunes", "el viernes" -> busca SIEMPRE la fecha exacta en la lista de arriba.
+- CRÍTICO DE COHERENCIA DÍA/FECHA: Consulta SIEMPRE la lista de los próximos 14 días. Si el cliente dice un día y una fecha (ej: "el 21"), verifica qué día de la semana es (ej: el 21 de agosto de 2026 es VIERNES). NUNCA inventes o mezcles el día con la fecha (ej: NUNCA digas "Lunes 21 de agosto" si el 21 es viernes).
 - Si no dice hora -> pregunta: "A que horas le queda bien?"
 - CRÍTICO: NUNCA aceptes ni crees citas en fechas u horas que ya pasaron. Si el cliente pide una hora/fecha que ya pasó, responde amablemente: "Lo siento, no es posible agendar en una fecha u hora que ya pasó. Por favor elige una fecha y hora futura."
 - CRÍTICO DE HISTORIAL: Si en los mensajes anteriores del chat aparecen menciones a fechas que ya pasaron (ejemplo "25 de julio" o cualquier día anterior a hoy), IGNÓRALAS POR COMPLETO. NUNCA las repitas, propongas ni sugieras para nuevos agendamientos o reprogramaciones. La fecha actual es HOY ({hoy_iso}).
+
 
 CANCELACIÓN Y ELIMINACIÓN DE CITAS
 REGLA MANDATORIA INVIOLABLE:
@@ -369,8 +371,11 @@ Ahora: {hora_bogota} - {dia_nombre} {now_bogota.day} de {mes_nombre} de {now_bog
 Proximos 14 dias disponibles:
 {calendario}
 - "hoy" = {hoy_iso} / "manana" = {manana_iso}
+- "el sabado", "el lunes", "el viernes" -> busca SIEMPRE la fecha exacta en la tabla de arriba.
+- CRÍTICO DE COHERENCIA DÍA/FECHA: Consulta SIEMPRE la tabla de próximos 14 días. Si el cliente dice un día y una fecha (ej: "el 21"), verifica qué día de la semana es (ej: el 21 de agosto de 2026 es VIERNES). NUNCA mezcles nombres de días con números de fecha erróneos (ej: NUNCA digas "Lunes 21 de agosto" si el 21 es viernes).
 - Si no dice hora -> pregunta: "A que horas le queda bien?"
 - NUNCA ofrezcas fechas pasadas
+
 
 CANCELACIÓN Y ELIMINACIÓN DE CITAS
 REGLA MANDATORIA INVIOLABLE:

@@ -158,7 +158,10 @@ class MessageHandler:
             negocio_servicios=negocio_servicios,
             tenant_id=tenant_id,
         )
-        # -- 10b. Garantizar recordatorio de reprogramación/cancelación de 1h y evitar placeholders -------
+        # -- 10b. Garantizar coherencia de día de la semana y recordatorio de 1h -------
+        if response_text:
+            response_text = self._fix_weekday_coherence(response_text)
+
         if response_text and "servicio:" in response_text.lower() and "fecha:" in response_text.lower() and "hora:" in response_text.lower():
             # -- 10c. Interceptar placeholders en el bloque de confirmación -----------
             if "[" in response_text and "]" in response_text:
@@ -177,6 +180,7 @@ class MessageHandler:
                         response_text = response_text[:idx] + "\n\n" + reminder_line + "\n" + response_text[idx:]
                     else:
                         response_text = response_text.rstrip() + "\n\n" + reminder_line
+
 
         logger.debug(f"[{tenant['nombre']}] GPT response: {response_text[:300]}")
 
@@ -353,8 +357,9 @@ class MessageHandler:
             logger.info(f"[{tenant['nombre']}] Sin accion CRM en el response")
 
         # -- 14. Enviar respuesta limpia al cliente (sin JSONs visibles) ------
-        final_message_to_send = clean_response or response_text
+        final_message_to_send = self._fix_weekday_coherence(clean_response or response_text)
         await wa.send_text(to=sender_wa_id, message=final_message_to_send)
+
         await wa.mark_as_read(message_id)
 
         # -- 15. Actualizar historial limpio en Supabase ----------------------
@@ -417,7 +422,50 @@ class MessageHandler:
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
         return cleaned
 
+    @staticmethod
+    def _fix_weekday_coherence(text: str) -> str:
+        """
+        Garantiza que cualquier mención de día de la semana y fecha numérica
+        coincida exactamente con el calendario gregoriano real.
+        Ejemplo: 'Lunes 21 de agosto de 2026' -> 'Viernes 21 de agosto de 2026'
+        """
+        if not text:
+            return text
+
+        dias_map = {0: 'Lunes', 1: 'Martes', 2: 'Miércoles', 3: 'Jueves', 4: 'Viernes', 5: 'Sábado', 6: 'Domingo'}
+        meses_map = {
+            'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4, 'mayo': 5, 'junio': 6,
+            'julio': 7, 'agosto': 8, 'septiembre': 9, 'octubre': 10, 'noviembre': 11, 'diciembre': 12
+        }
+        pattern = re.compile(
+            r'\b(Lunes|Martes|Mi[ée]rcoles|Jueves|Viernes|S[aá]bado|Domingo)?\s*(\d{1,2})\s+de\s+([a-zA-ZáéíóúÁÉÍÓÚ]+)(?:\s+de\s+(\d{4}))?\b',
+            re.IGNORECASE
+        )
+
+        def replacer(match):
+            dia_num = int(match.group(2))
+            mes_nombre = match.group(3).lower()
+            year_str = match.group(4)
+            year = int(year_str) if year_str else 2026
+
+            mes_num = meses_map.get(mes_nombre)
+            if not mes_num:
+                return match.group(0)
+
+            try:
+                dt = datetime(year, mes_num, dia_num)
+                dia_correcto = dias_map[dt.weekday()]
+                if year_str:
+                    return f"{dia_correcto} {dia_num} de {mes_nombre} de {year}"
+                else:
+                    return f"{dia_correcto} {dia_num} de {mes_nombre}"
+            except Exception:
+                return match.group(0)
+
+        return pattern.sub(replacer, text)
+
     def _extract_crm_action(self, text: str) -> dict | None:
+
         """
         Extrae acciones CRM en JSON del texto (BOOK, ESCALATE, CANCEL, RESCHEDULE, LEAD, PQR).
         """
