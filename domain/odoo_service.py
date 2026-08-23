@@ -76,7 +76,7 @@ class OdooService:
         self.user = (user or "").strip()
         self.api_key = (api_key or "").strip()
         self._uid = None
-        self.professional_field_name = "professional_id"  # por defecto
+        self.professional_field_name = "spa_professional_id"  # por defecto (estándar Beauty/Spa)
         if not self.url:
             logger.error("❌ OdooService: odoo_url vacía o inválida — skip auth")
             return
@@ -137,26 +137,28 @@ class OdooService:
             self._uid = result
             logger.info(f"✅ Odoo JSON-RPC autenticado. uid={self._uid} db={self.db}")
 
-            # Detectar dinámicamente si el campo de profesional es 'professional_id' o 'spa_professional_id'
-            self.professional_field_name = "professional_id"  # por defecto
+            # Detectar dinámicamente si el campo de profesional es 'spa_professional_id' o 'professional_id'
+            self.professional_field_name = "spa_professional_id"
             try:
                 # Usar _jsonrpc directamente para evitar recursión infinita
-                full_args = [self.db, self._uid, self.api_key, "calendar.event", "fields_get", [["professional_id", "spa_professional_id"]], {"attributes": ["type"]}]
+                full_args = [self.db, self._uid, self.api_key, "calendar.event", "fields_get", []]
                 fields = self._jsonrpc(service="object", method="execute_kw", args=full_args)
                 if fields and isinstance(fields, dict):
-                    if "professional_id" in fields:
-                        self.professional_field_name = "professional_id"
-                    elif "spa_professional_id" in fields:
+                    if "spa_professional_id" in fields:
                         self.professional_field_name = "spa_professional_id"
+                    elif "professional_id" in fields:
+                        self.professional_field_name = "professional_id"
                     else:
-                        logger.warning("calendar.event: no se encontró ni 'professional_id' ni 'spa_professional_id' — se omitirá el profesional al crear citas")
+                        logger.warning("calendar.event: no se encontró 'spa_professional_id' ni 'professional_id' — usando spa_professional_id")
             except Exception as e_field:
                 logger.warning(f"No se pudo detectar el campo de profesional en calendar.event: {e_field}")
+                self.professional_field_name = "spa_professional_id"
             logger.info(f"Odoo: Campo de profesional detectado y configurado como: '{self.professional_field_name}'")
 
         except Exception as e:
             logger.error(f"❌ Error autenticando en Odoo: {e}")
             self._uid = None
+
 
     def _execute(self, model: str, method: str, args: list, kwargs: dict = None) -> any:
         """Wrapper para execute_kw."""
@@ -423,106 +425,104 @@ class OdooService:
         return pids[0] if pids else None
 
     def _fallback_get_client_appointments(self, phone: str) -> dict:
-        """Fallback: busca citas del cliente en calendar.event mediante partner_id, teléfono y descripción."""
+        """
+        Busca citas activas del cliente en calendar.event mediante búsqueda normalizada por dígitos,
+        soportando cualquier formato (con o sin espacios, prefijo +57, guiones o contactos de res.partner).
+        """
         if not phone:
             return {"success": True, "citas": [], "total": 0}
         try:
-            clean_10 = phone[-10:] if len(phone) >= 10 else phone
-            events_dict = {}
-
-            # 1. Búsqueda por partner_ids
-            partner_ids = self.find_partner_ids(phone)
-            prof_field = self.professional_field_name or "spa_professional_id"
-            base_fields = ["id", "name", "start", "stop", "description", prof_field]
-            for pid in partner_ids:
-                if isinstance(pid, int):
-                    try:
-                        evs1 = self._execute(
-                            "calendar.event", "search_read",
-                            [[["partner_ids", "in", [pid]], ["active", "=", True]]],
-                            {"fields": base_fields, "order": "start desc"}
-                        )
-                        for ev in evs1 or []:
-                            events_dict[ev["id"]] = ev
-                    except Exception as e1:
-                        logger.warning(f"Fallback query partner {pid} error: {e1}")
-
-            # 2. Búsqueda por spa_customer_phone
-            try:
-                evs2 = self._execute(
-                    "calendar.event", "search_read",
-                    [[["spa_customer_phone", "ilike", clean_10], ["active", "=", True]]],
-                    {"fields": base_fields, "order": "start desc"}
-                )
-                for ev in evs2 or []:
-                    events_dict[ev["id"]] = ev
-            except Exception as e2:
-                logger.warning(f"Fallback query 2 error: {e2}")
-
-            # 3. Búsqueda por descripción (ej: "Tel: 573018511200")
-            try:
-                evs3 = self._execute(
-                    "calendar.event", "search_read",
-                    [[["description", "ilike", clean_10], ["active", "=", True]]],
-                    {"fields": base_fields, "order": "start desc"}
-                )
-                for ev in evs3 or []:
-                    events_dict[ev["id"]] = ev
-            except Exception as e3:
-                logger.warning(f"Fallback query 3 error: {e3}")
+            digits = "".join(c for c in str(phone) if c.isdigit())
+            digits_10 = digits[-10:] if len(digits) >= 10 else digits
+            if not digits_10:
+                return {"success": True, "citas": [], "total": 0}
 
             from datetime import datetime, timedelta, timezone
             bogota_tz = timezone(timedelta(hours=-5))
             ahora_bogota = datetime.now(bogota_tz)
-            
+            fecha_minima = (ahora_bogota - timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
+
+            prof_field = self.professional_field_name or "spa_professional_id"
+            base_fields = ["id", "name", "start", "stop", "spa_customer_phone", "partner_ids", "description", prof_field]
+
+            # 1. Leer todos los eventos activos desde ayer en adelante
+            evs = self._execute(
+                "calendar.event", "search_read",
+                [[["start", ">=", fecha_minima], ["active", "=", True]]],
+                {"fields": base_fields, "order": "start asc"}
+            )
+
+            # 2. Buscar contactos de res.partner cuyos teléfonos coincidan por dígitos
+            matching_pids = set()
+            try:
+                partners = self._execute(
+                    "res.partner", "search_read",
+                    [[["active", "=", True]]],
+                    {"fields": ["id", "phone", "mobile"]}
+                )
+                for p in partners or []:
+                    p_phone = "".join(c for c in (p.get("phone") or "") if c.isdigit())
+                    p_mob = "".join(c for c in (p.get("mobile") or "") if c.isdigit())
+                    if (p_phone and digits_10 in p_phone) or (p_mob and digits_10 in p_mob):
+                        matching_pids.add(p["id"])
+            except Exception as e_part:
+                logger.warning(f"Odoo: error buscando partners por dígitos: {e_part}")
+
             citas = []
-            for ev in events_dict.values():
-                start_str = ev.get("start", "")
-                if start_str:
-                    try:
-                        dt_utc = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                        dt_bogota = dt_utc.astimezone(bogota_tz)
-                        if dt_bogota < ahora_bogota - timedelta(hours=2):
-                            continue
-                        fecha_formatted = dt_bogota.strftime("%d/%m/%Y")
-                        hora_formatted = dt_bogota.strftime("%H:%M")
-                    except Exception:
-                        fecha_formatted = start_str[:10]
-                        hora_formatted = start_str[11:16]
-                else:
-                    fecha_formatted = ""
-                    hora_formatted = ""
-                
-                prof_field = self.professional_field_name or "spa_professional_id"
-                raw_prof = ev.get(prof_field)
-                if isinstance(raw_prof, (list, tuple)) and len(raw_prof) == 2:
-                    profesional_name = raw_prof[1]  # [id, "Nombre Profesional"]
-                    profesional_id = raw_prof[0]
-                elif isinstance(raw_prof, dict):
-                    profesional_name = raw_prof.get("name", "Asignado")
-                    profesional_id = raw_prof.get("id")
-                else:
-                    profesional_name = "Asignado"
-                    profesional_id = None
-                
-                raw_name = ev.get("name", "")
-                servicio_name = raw_name.split("-")[0].strip() if "-" in raw_name else raw_name
-                
-                citas.append({
-                    "id": ev["id"],
-                    "servicio": servicio_name,
-                    "profesional": profesional_name,
-                    "profesional_id": profesional_id,
-                    "fecha": fecha_formatted,
-                    "hora": hora_formatted,
-                    "start_utc": start_str,  # conservamos UTC para comparaciones internas
-                })
-            
-            logger.info(f"Odoo Fallback get_client_appointments para {phone}: {len(citas)} citas encontradas")
+            for ev in evs or []:
+                ev_phone = "".join(c for c in (ev.get("spa_customer_phone") or "") if c.isdigit())
+                ev_desc = "".join(c for c in (ev.get("description") or "") if c.isdigit())
+                ev_name = "".join(c for c in (ev.get("name") or "") if c.isdigit())
+                ev_partners = ev.get("partner_ids") or []
+                partner_match = any(pid in matching_pids for pid in ev_partners if isinstance(pid, int))
+
+                if (ev_phone and digits_10 in ev_phone) or (ev_desc and digits_10 in ev_desc) or (ev_name and digits_10 in ev_name) or partner_match:
+                    start_str = ev.get("start", "")
+                    if start_str:
+                        try:
+                            dt_utc = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                            dt_bogota = dt_utc.astimezone(bogota_tz)
+                            if dt_bogota < ahora_bogota - timedelta(hours=2):
+                                continue
+                            fecha_formatted = dt_bogota.strftime("%d/%m/%Y")
+                            hora_formatted = dt_bogota.strftime("%H:%M")
+                        except Exception:
+                            fecha_formatted = start_str[:10]
+                            hora_formatted = start_str[11:16]
+                    else:
+                        fecha_formatted = ""
+                        hora_formatted = ""
+
+                    raw_prof = ev.get(prof_field)
+                    if isinstance(raw_prof, (list, tuple)) and len(raw_prof) == 2:
+                        profesional_name = raw_prof[1]
+                        profesional_id = raw_prof[0]
+                    elif isinstance(raw_prof, dict):
+                        profesional_name = raw_prof.get("name", "Asignado")
+                        profesional_id = raw_prof.get("id")
+                    else:
+                        profesional_name = "Asignado"
+                        profesional_id = None
+
+                    raw_name = ev.get("name", "")
+                    servicio_name = raw_name.split("-")[0].strip() if "-" in raw_name else raw_name
+
+                    citas.append({
+                        "id": ev["id"],
+                        "servicio": servicio_name,
+                        "profesional": profesional_name,
+                        "profesional_id": profesional_id,
+                        "fecha": fecha_formatted,
+                        "hora": hora_formatted,
+                        "start_utc": start_str,
+                    })
+
+            logger.info(f"Odoo get_client_appointments para {phone} (dígitos={digits_10}): {len(citas)} citas encontradas")
             return {"success": True, "citas": citas, "total": len(citas)}
         except Exception as e:
             logger.error(f"Fallback get_client_appointments error: {e}")
             return {"success": False, "citas": [], "total": 0}
+
 
     def cancel_appointment_spa(self, cita_id: int = 0, phone: str = "") -> dict:
         """
