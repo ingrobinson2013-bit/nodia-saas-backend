@@ -231,18 +231,22 @@ class MessageHandler:
             negocio_servicios=negocio_servicios,
             tenant_id=tenant_id,
         )
-        # -- 10b. Garantizar coherencia de día de la semana y recordatorio de 1h -------
+        # -- 10b. Garantizar formato 12h AM/PM, coherencia de fecha y recordatorio de 1h -------
         if response_text:
             response_text = self._fix_weekday_coherence(response_text)
+            response_text = self._fix_military_time_to_12h(response_text)
 
         if response_text and "servicio:" in response_text.lower() and "fecha:" in response_text.lower() and "hora:" in response_text.lower():
-            # -- 10c. Interceptar placeholders en el bloque de confirmación -----------
-            if "[" in response_text and "]" in response_text:
-                nombre_line = next((line for line in response_text.split("\n") if "nombre:" in line.lower()), "")
-                if "[" in nombre_line or "tu nombre" in nombre_line.lower() or "nombre del cliente" in nombre_line.lower() or "tu_nombre" in nombre_line.lower():
-                    response_text = "Antes de confirmar la cita, ¿me podrías regalar tu nombre completo, por favor? 😊"
+            # -- 10c. Interceptar placeholders o nombres comerciales en el bloque de confirmación -----------
+            nombre_line = next((line for line in response_text.split("\n") if "nombre:" in line.lower()), "")
+            nombre_val = nombre_line.split(":", 1)[1].strip().lower() if ":" in nombre_line else ""
+            es_nombre_comercial = any(w in nombre_val for w in ["store", "sas", "tienda", "shop", "negocio", "co.", "beauty", "empresa", "no identificado", "cliente"])
             
-            # Solo si no interceptamos por placeholder, garantizamos la nota de 1h
+            if "[" in response_text or es_nombre_comercial or not nombre_val:
+                if "[" in nombre_line or "tu nombre" in nombre_line or "nombre del cliente" in nombre_line or es_nombre_comercial or not nombre_val:
+                    response_text = "Antes de confirmar la cita, ¿me podrías regalar tu nombre completo para dejarla registrada a tu nombre? 😊"
+            
+            # Solo si no interceptamos por nombre, garantizamos la nota de 1h
             if response_text and "Antes de confirmar la cita" not in response_text:
                 if "una hora antes" not in response_text.lower() and "1 hora antes" not in response_text.lower() and "reprogramar" not in response_text.lower():
                     reminder_line = "*(Recuerda que si requieres reprogramar o cancelar tu cita, debes hacerlo al menos una hora antes)*"
@@ -253,6 +257,7 @@ class MessageHandler:
                         response_text = response_text[:idx] + "\n\n" + reminder_line + "\n" + response_text[idx:]
                     else:
                         response_text = response_text.rstrip() + "\n\n" + reminder_line
+
 
 
         logger.debug(f"[{tenant['nombre']}] GPT response: {response_text[:300]}")
@@ -535,6 +540,28 @@ class MessageHandler:
             except Exception:
                 return match.group(0)
 
+        return pattern.sub(replacer, text)
+
+    @staticmethod
+    def _fix_military_time_to_12h(text: str) -> str:
+        """
+        Garantiza que cualquier horario en formato militar de 24h (ej: 08:00, 14:30, 19:00)
+        sea convertido automáticamente a formato 12h con AM/PM (ej: 8:00 AM, 2:30 PM, 7:00 PM).
+        """
+        if not text:
+            return text
+
+        def replacer(match):
+            hh = int(match.group(1))
+            mm = int(match.group(2))
+            period = "AM" if hh < 12 else "PM"
+            hh12 = hh % 12
+            if hh12 == 0:
+                hh12 = 12
+            return f"{hh12}:{mm:02d} {period}"
+
+        # Detecta HH:MM en 24h que no esté seguido ya por am/pm/AM/PM
+        pattern = re.compile(r'\b(0[0-9]|1[0-9]|2[0-3]):([0-5][0-9])(?!\s*(?:am|pm|AM|PM))\b')
         return pattern.sub(replacer, text)
 
     def _extract_crm_action(self, text: str) -> dict | None:

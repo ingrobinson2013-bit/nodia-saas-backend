@@ -476,13 +476,28 @@ class AIService:
                                     if prof_id:
                                         raw_slots = odoo.get_available_slots(date_str, professional_id=prof_id, service_id=serv_id)
                                         avail_times = [s.get("time") for s in raw_slots if isinstance(s, dict) and s.get("available")]
+                                        
+                                        def _to_12h(t_str: str) -> str:
+                                            try:
+                                                p = t_str.strip().split(":")
+                                                h, m = int(p[0]), int(p[1])
+                                                am_pm = "AM" if h < 12 else "PM"
+                                                h12 = h % 12
+                                                if h12 == 0:
+                                                    h12 = 12
+                                                return f"{h12}:{m:02d} {am_pm}"
+                                            except Exception:
+                                                return t_str
+
+                                        avail_times_12h = [_to_12h(t) for t in avail_times]
                                         dur_min_val = odoo.get_service_duration_minutes(serv_id) if serv_id else 60
                                         slots_info = {
                                             "profesional": prof_name,
                                             "professional_id": prof_id,
                                             "service_id": serv_id,
                                             "duracion_minutos": dur_min_val,
-                                            "horas_libres": avail_times
+                                            "horas_disponibles_AM_PM": avail_times_12h,
+                                            "instruccion_formato": "Ofrece horarios SIEMPRE en formato 12h (ej: 8:00 AM, 2:30 PM). Sugiere 3 a 5 opciones clave entre mañana y tarde, NO una lista de 20 renglones."
                                         }
                                         tool_result = json.dumps(slots_info, ensure_ascii=False)
                                     else:
