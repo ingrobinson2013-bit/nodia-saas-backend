@@ -289,8 +289,11 @@ Hora: [hora]
 
 Confirma?
 
-CRITICO: Cada linea debe ser un renglon separado. NUNCA en una sola linea.
--> Solo genera el JSON de BOOK (o usa la tool create_appointment) cuando el cliente responda: si / listo / dale / perfecto / confirmo / eso / claro
+REGLA DE CONFIRMACIÓN Y CREACIÓN DE CITAS:
+- Cuando el cliente confirme la cita (diciendo "sí", "si", "ok", "listo", "dale", "perfecto", "confirmo", "eso", "claro", "👍"):
+  1. DEBES LLAMAR INMEDIATAMENTE a la herramienta `create_appointment` para guardar la cita en el sistema.
+  2. Responde en lenguaje natural, cálido y conciso confirmando la cita al cliente (ej: "¡Listo, Carlos! Tu cita ha quedado confirmada para el Lunes 24 de agosto a las 5:30 PM. ¡Te esperamos! 😊").
+  3. NUNCA respondas con bloques JSON de texto aislados. Toda tu comunicación debe ser texto conversacional amable para WhatsApp.
 
 QUEJAS Y PROBLEMAS
 "Ay, que pena lo que paso! Yo misma le ayudo a solucionarlo"
@@ -299,18 +302,10 @@ Escala automaticamente si:
 - Lleva mas de 2 respuestas sin resolver
 - Insulta o esta muy alterado
 
-ACCIONES CRM (SOLO JSON, sin texto adicional)
-Cita confirmada:
-{{"action":"BOOK","name":"","service":"","price":"","date":"YYYY-MM-DD","time":"HH:MM","branch_id":"{tenant_id}"}}
-
-Interes sin agendar:
-{{"action":"LEAD","name":"","interest":"","notes":"","branch_id":"{tenant_id}"}}
-
-Queja o problema:
-{{"action":"PQR","name":"","issue":"","priority":"alta/media/baja","branch_id":"{tenant_id}"}}
-
-Escalar a humano:
-{{"action":"ESCALATE","name":"","reason":"","branch_id":"{tenant_id}"}}
+ACCIONES CRM (metadatos internos):
+- Si requieres emitir una acción CRM, hazlo solo como metadato al final de una respuesta de texto conversacional completa:
+  * Cita confirmada: {{"action":"BOOK","name":"","service":"","price":"","date":"YYYY-MM-DD","time":"HH:MM","branch_id":"{tenant_id}"}}
+  * Escalar humano: {{"action":"ESCALATE","name":"","reason":"","branch_id":"{tenant_id}"}}
 
 REGLAS DE ORO
 - Maximo 3 frases por respuesta (estilo WhatsApp)
@@ -413,10 +408,9 @@ REGLA MANDATORIA INVIOLABLE:
    DEBES LLAMAR INMEDIATAMENTE A LA TOOL `reschedule_appointment` con el `cita_id`, `nueva_fecha` y `nueva_hora`.
    CRÍTICO: NUNCA digas que la cita fue reagendada sin haber ejecutado la tool `reschedule_appointment` en esa misma respuesta.
 
-ACCIONES CRM (emitir como JSON puro al final de tu respuesta)
-Cita confirmada -> {{"action":"BOOK","name":"","service":"","price":"","date":"YYYY-MM-DD","time":"HH:MM","branch_id":"{tenant_id}"}}
-Interes sin agendar -> {{"action":"LEAD","name":"","interest":"","notes":"","branch_id":"{tenant_id}"}}
-Queja -> {{"action":"PQR","name":"","issue":"","priority":"alta/media/baja","branch_id":"{tenant_id}"}}
-Escalar humano -> {{"action":"ESCALATE","name":"","reason":"","branch_id":"{tenant_id}"}}"""
+ACCIONES CRM (metadatos internos):
+- Si requieres emitir una acción CRM, hazlo solo como metadato al final de una respuesta de texto conversacional completa:
+  * Cita confirmada -> {{"action":"BOOK","name":"","service":"","price":"","date":"YYYY-MM-DD","time":"HH:MM","branch_id":"{tenant_id}"}}
+  * Escalar humano -> {{"action":"ESCALATE","name":"","reason":"","branch_id":"{tenant_id}"}}"""
 
     return base_prompt.strip() + dynamic_block

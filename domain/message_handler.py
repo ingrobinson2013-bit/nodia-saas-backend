@@ -336,19 +336,81 @@ class MessageHandler:
 
         # -- 13. Otras acciones CRM via JSON en texto (ESCALATE/CANCEL/RESCHEDULE/BOOK fallback) --
         crm_action = self._extract_crm_action(response_text)
-        clean_response = self._clean_json_from_text(response_text)
 
         # Fallback de booking si GPT emitió el JSON en texto pero no llamó a la tool de booking
         if not booking_data and crm_action and crm_action.get("action") == "BOOK":
+            b_name = crm_action.get("name") or sender_name or sender_wa_id
+            b_service = crm_action.get("service", "Servicio")
+            b_price = crm_action.get("price", "")
+            b_date = crm_action.get("date", "")
+            b_time_raw = crm_action.get("time", "10:00")
+            
+            # Convertir hora 12h (ej: "5:30 PM", "05:30 PM") a 24h (ej: "17:30")
+            b_time = b_time_raw
+            try:
+                t_clean = str(b_time_raw).strip().upper()
+                if "AM" in t_clean or "PM" in t_clean:
+                    is_pm = "PM" in t_clean
+                    t_digits = re.sub(r'[^0-9:]', '', t_clean)
+                    parts = t_digits.split(":")
+                    hh = int(parts[0])
+                    mm = int(parts[1]) if len(parts) > 1 else 0
+                    if is_pm and hh < 12:
+                        hh += 12
+                    elif not is_pm and hh == 12:
+                        hh = 0
+                    b_time = f"{hh:02d}:{mm:02d}"
+            except Exception as ex_t:
+                logger.warning(f"Error parseando hora en fallback BOOK: {ex_t}")
+
+            new_odoo_id = "0"
+            if odoo_config:
+                try:
+                    from domain.odoo_service import OdooService
+                    odoo_fallback = OdooService(**odoo_config)
+                    created_id = odoo_fallback.create_appointment(
+                        name=b_name,
+                        phone=sender_wa_id,
+                        date_str=b_date,
+                        time_str=b_time,
+                        service_name=b_service,
+                        price=b_price
+                    )
+                    if created_id:
+                        new_odoo_id = str(created_id)
+                        logger.info(f"[{tenant['nombre']}] Cita Odoo creada via fallback JSON BOOK: event_id={new_odoo_id}")
+                except Exception as ex_od:
+                    logger.error(f"Error creando cita en Odoo desde fallback JSON: {ex_od}")
+
             booking_data = {
-                "cliente_nombre": crm_action.get("name") or sender_name or sender_wa_id,
-                "servicio": crm_action.get("service", "Servicio"),
-                "precio": crm_action.get("price", ""),
-                "fecha": crm_action.get("date", ""),
-                "hora": crm_action.get("time", "10:00"),
-                "odoo_event_id": 0
+                "cliente_nombre": b_name,
+                "servicio": b_service,
+                "precio": b_price,
+                "fecha": b_date,
+                "hora": b_time,
+                "odoo_event_id": int(new_odoo_id) if new_odoo_id.isdigit() else 0
             }
-            logger.info(f"[{tenant['nombre']}] Booking recuperado de fallback JSON: {booking_data}")
+            
+            # Persistir en citas_log
+            try:
+                log_entry = {
+                    "tenant_id": tenant_id,
+                    "wa_from": sender_wa_id,
+                    "cliente_nombre": b_name,
+                    "servicio": b_service,
+                    "fecha_cita": b_date,
+                    "hora_cita": f"{b_time}:00",
+                    "odoo_event_id": new_odoo_id,
+                    "origen": "whatsapp_bot_fallback",
+                    "estado": "confirmada",
+                }
+                appointment_log_repo.insert_log(log_entry)
+                chat_session_repo.update_session(session["id"], {
+                    "estado": "cita_confirmada",
+                    "cita_odoo_id": new_odoo_id,
+                })
+            except Exception as e_log:
+                logger.error(f"Error persistiendo citas_log desde fallback JSON: {e_log}")
 
         if crm_action:
             action = crm_action.get("action")
@@ -434,9 +496,22 @@ class MessageHandler:
         else:
             logger.info(f"[{tenant['nombre']}] Sin accion CRM en el response")
 
-        # -- 14. Enviar respuesta limpia al cliente (sin JSONs visibles) ------
-        final_message_to_send = self._fix_weekday_coherence(clean_response or response_text)
+        # -- 14. Enviar respuesta limpia al cliente (PROHIBIDO filtrar JSONs visibles) ------
+        clean_text = self._clean_json_from_text(response_text).strip()
+        if not clean_text:
+            if crm_action and crm_action.get("action") == "BOOK":
+                clean_text = "¡Listo! Tu cita ha quedado agendada con éxito. ¡Te esperamos! 😊"
+            elif crm_action and crm_action.get("action") == "ESCALATE":
+                clean_text = "¡Listo! Ya te pongo en contacto con un asesor humano para que te ayude. 😊"
+            elif crm_action and crm_action.get("action") == "CANCEL":
+                clean_text = "Tu cita ha sido cancelada correctamente. Si necesitas algo más, aquí estoy para ayudarte. 😊"
+            else:
+                clean_text = "¡Listo! Si necesitas algo más, aquí estoy con mucho gusto. 😊"
+
+        final_message_to_send = self._fix_weekday_coherence(clean_text)
+        final_message_to_send = self._fix_military_time_to_12h(final_message_to_send)
         await wa.send_text(to=sender_wa_id, message=final_message_to_send)
+
 
         await wa.mark_as_read(message_id)
 
