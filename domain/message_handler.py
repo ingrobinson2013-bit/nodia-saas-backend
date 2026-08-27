@@ -144,9 +144,11 @@ class MessageHandler:
 
         # -- 3. Guardar el mensaje del usuario en el historial ---------------
         history = session.get("history") or []
+        is_voice_note = bool(msg_type in ["audio", "voice"] or media_id)
+        saved_content = f"🎙️ [Nota de voz]: {message_text}" if is_voice_note else message_text
         user_message_entry = {
             "role": "user",
-            "content": message_text,
+            "content": saved_content,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
