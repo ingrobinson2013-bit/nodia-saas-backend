@@ -5,8 +5,9 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    SUPABASE_URL: str
-    SUPABASE_SERVICE_KEY: str
+    DATABASE_URL: str = ""
+    SUPABASE_URL: str = ""
+    SUPABASE_SERVICE_KEY: str = ""
     META_VERIFY_TOKEN: str = "nodia_verify_token_2024"
     META_APP_SECRET: str = ""
     META_APP_ID: str = ""

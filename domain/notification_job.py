@@ -114,20 +114,17 @@ async def _process_tenant(tenant: dict):
             phone = f"57{phone[-10:]}"
 
         # Verificar si ya notificamos este evento a este teléfono (deduplicacion GLOBAL)
-        # — evita doble envío cuando dos tenants comparten el mismo Odoo
         try:
-            ya_notificado = (
-                db.table("notificaciones_wa")
-                .select("id")
-                .eq("odoo_event_id", str(event_id))
-                .eq("phone", phone)
-                .execute()
+            from infrastructure.database import fetch_one, execute_sql
+            ya_notificado = fetch_one(
+                "SELECT id FROM notificaciones_wa WHERE odoo_event_id = %s AND phone = %s LIMIT 1;",
+                (str(event_id), phone)
             )
-            if ya_notificado.data:
+            if ya_notificado:
                 logger.info(f"NotificationJob [{nombre}]: event {event_id} ya notificado a {phone} por otro tenant, skip")
                 continue
         except Exception:
-            pass  # Si la tabla no existe aun, continuamos
+            pass
 
         # Enviar WhatsApp — primero intenta con template, fallback a texto libre
         try:
@@ -173,15 +170,12 @@ async def _process_tenant(tenant: dict):
                 await wa.send_text(to=phone, message=mensaje)
                 logger.info(f"NotificationJob [{nombre}]: Texto libre WA enviado a {phone} evento {event_id}")
 
-            # Registrar envio en Supabase
+            # Registrar envio en PostgreSQL
             try:
-                db.table("notificaciones_wa").insert({
-                    "tenant_id":      tenant_id,
-                    "odoo_event_id":  str(event_id),
-                    "phone":          phone,
-                    "enviado_at":     datetime.now(timezone.utc).isoformat(),
-                    "estado":         "enviado",
-                }).execute()
+                execute_sql(
+                    "INSERT INTO notificaciones_wa (tenant_id, odoo_event_id, phone, sent_at) VALUES (%s, %s, %s, NOW());",
+                    (tenant_id, str(event_id), phone)
+                )
             except Exception as e:
                 logger.warning(f"NotificationJob: no se pudo registrar en notificaciones_wa: {e}")
 

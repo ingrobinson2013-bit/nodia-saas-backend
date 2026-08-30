@@ -111,19 +111,15 @@ class MessageHandler:
                 message_text = transcribed_text
                 logger.info(f"[{tenant['nombre']}] 🎙️ Nota de voz transcrita exitosamente: '{message_text}'")
 
-                # Registrar trazabilidad en Supabase voice_transcriptions
+                # Registrar trazabilidad en PostgreSQL voice_transcriptions
                 try:
-                    from supabase import create_client
-                    from config import settings
-                    db_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
-                    db_client.table("voice_transcriptions").insert({
-                        "phone": sender_wa_id,
-                        "media_id": media_id,
-                        "transcript": message_text,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }).execute()
+                    from infrastructure.database import execute_sql
+                    execute_sql(
+                        "INSERT INTO voice_transcriptions (phone, media_id, transcript) VALUES (%s, %s, %s);",
+                        (sender_wa_id, media_id, message_text)
+                    )
                 except Exception as log_err:
-                    logger.debug(f"Log voice_transcriptions omitido (tabla pendiente): {log_err}")
+                    logger.debug(f"Log voice_transcriptions omitido: {log_err}")
 
             except Exception as audio_err:
                 logger.error(f"Error procesando nota de voz de {sender_wa_id}: {audio_err}", exc_info=True)
