@@ -42,7 +42,7 @@ class UpdateTenantConfigRequest(BaseModel):
 @router.get("/tenants")
 async def list_tenants():
     """Retorna todos los tenants registrados en PostgreSQL."""
-    sql = "SELECT tenant_id, nombre, wa_phone_number, created_at, activo FROM tenants ORDER BY created_at ASC;"
+    sql = "SELECT tenant_id, nombre, wa_phone_id, created_at, activo FROM tenants ORDER BY created_at ASC;"
     rows = fetch_all(sql)
     return {"success": True, "tenants": rows or []}
 
