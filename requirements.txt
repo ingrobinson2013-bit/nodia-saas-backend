@@ -9,4 +9,3 @@ pydantic==2.7.1
 pydantic-settings==2.2.1
 pytz==2024.1
 numpy>=1.26.0
-sentence-transformers>=3.0.0
