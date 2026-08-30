@@ -15,7 +15,6 @@
 import logging
 import asyncio
 from datetime import datetime, timezone
-from infrastructure.database import get_supabase
 from infrastructure.repositories.tenant_repo import TenantRepository
 from domain.odoo_service import OdooService
 from domain.whatsapp_service import WhatsAppService

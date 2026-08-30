@@ -3,7 +3,7 @@
 
 from typing import Optional, List, Dict, Any
 import logging
-from infrastructure.database import fetch_one, fetch_all, execute_sql, get_supabase
+from infrastructure.database import fetch_one, fetch_all, execute_sql
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,9 @@
 # infrastructure/database.py
-# Capa de Acceso a Base de Datos — PostgreSQL Nativo Local con Connection Pooling & Supabase Fallback
+# Capa de Acceso a Base de Datos — PostgreSQL 17 Nativo con Connection Pooling
 
 import logging
 import os
 from contextlib import contextmanager
-from functools import lru_cache
 from typing import Optional, Generator, Any, List, Dict
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
@@ -23,7 +22,7 @@ def get_database_url() -> str:
         or "postgresql://postgres:Ashley2023@nodia-saas_nodia-postgres:5432/nodia-saas"
     )
 
-def init_postgres_pool(minconn: int = 1, maxconn: int = 20) -> Optional[ThreadedConnectionPool]:
+def init_postgres_pool(minconn: int = 2, maxconn: int = 20) -> ThreadedConnectionPool:
     global _pg_pool
     if _pg_pool is None:
         db_url = get_database_url()
@@ -31,8 +30,8 @@ def init_postgres_pool(minconn: int = 1, maxconn: int = 20) -> Optional[Threaded
             _pg_pool = ThreadedConnectionPool(minconn, maxconn, db_url)
             logger.info("✅ PostgreSQL Connection Pool inicializado con éxito.")
         except Exception as e:
-            logger.warning(f"⚠️ No se pudo inicializar PostgreSQL Pool ({e}). Se usará Supabase como fallback.")
-            _pg_pool = None
+            logger.error(f"❌ Error crítico inicializando PostgreSQL Pool: {e}")
+            raise e
     return _pg_pool
 
 @contextmanager
@@ -42,9 +41,6 @@ def get_db_cursor() -> Generator[Any, None, None]:
     Garantiza commit automático y retorno de conexión al pool.
     """
     pool = init_postgres_pool()
-    if not pool:
-        raise RuntimeError("PostgreSQL pool no disponible.")
-    
     conn = pool.getconn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -86,17 +82,4 @@ def execute_sql(sql: str, params: tuple = ()) -> bool:
         logger.error(f"execute_sql error: {e} | SQL: {sql}")
         return False
 
-# Mantener compatibilidad con Supabase por si se requiere
-@lru_cache(maxsize=1)
-def get_supabase():
-    """
-    Cliente Supabase singleton para fallback.
-    """
-    try:
-        from supabase import create_client
-        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
-            return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
-    except Exception as e:
-        logger.warning(f"Supabase client fallback init error: {e}")
-    return None
 

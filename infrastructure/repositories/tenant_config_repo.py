@@ -4,7 +4,7 @@
 from typing import Optional
 import json
 import logging
-from infrastructure.database import fetch_one, execute_sql, get_supabase
+from infrastructure.database import fetch_one, execute_sql
 
 logger = logging.getLogger(__name__)
 

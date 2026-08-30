@@ -1,13 +1,13 @@
 # config.py
 # Configuración centralizada — carga variables de entorno
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = ""
-    SUPABASE_URL: str = ""
-    SUPABASE_SERVICE_KEY: str = ""
+    model_config = SettingsConfigDict(extra="ignore", env_file=".env")
+
+    DATABASE_URL: str = "postgresql://postgres:Ashley2023@nodia-saas_nodia-postgres:5432/nodia-saas"
     META_VERIFY_TOKEN: str = "nodia_verify_token_2024"
     META_APP_SECRET: str = ""
     META_APP_ID: str = ""
@@ -24,9 +24,6 @@ class Settings(BaseSettings):
     SMTP_SENDER: str = ""  # e.g., "BeautySync Pro Alertas <alertas@beautysyncpro.app>"
     NOTIFY_EMAIL: str = ""  # recipient for qualified leads
     SALES_TENANT_ID: str = "3273dbab-9d62-4d3e-84ef-2d462b1ede0a"  # Exclusive tenant
-
-    class Config:
-        env_file = ".env"
 
 
 settings = Settings()

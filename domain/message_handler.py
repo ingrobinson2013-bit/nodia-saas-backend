@@ -154,6 +154,20 @@ class MessageHandler:
             chat_session_repo.update_history(session["id"], history + [user_message_entry])
             return
 
+        # -- 4.1 Enrutador Semántico Fast-Path ($0 USD / 15ms) ---------------
+        from domain.semantic_router import semantic_router
+        intent, conf, fast_reply = semantic_router.classify_and_route(message_text, tenant)
+        if fast_reply:
+            logger.info(f"[{tenant['nombre']}] ⚡ Fast-Path activado [{intent} - {conf*100:.0f}%]: '{fast_reply[:60]}...'")
+            await wa.send_text(to=sender_wa_id, message=fast_reply)
+            history.append(user_message_entry)
+            history.append({
+                "role": "assistant",
+                "content": fast_reply,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            chat_session_repo.update_history(session["id"], history)
+            return
 
         # -- 5. Preparar historial para OpenAI --------------------------------
         history_context = history[-MAX_HISTORY:]
