@@ -69,6 +69,12 @@ class MessageHandler:
 
         tenant_id = tenant["tenant_id"]
 
+        # Inicializar cliente de WhatsApp para el tenant
+        wa = WhatsAppService(
+            phone_number_id=tenant["wa_phone_id"],
+            access_token=tenant["wa_access_token"],
+        )
+
         # -- 1b. Procesar Nota de Voz / Audio si aplica ----------------------
         if msg_type in ["audio", "voice"] or media_id:
             wa_audio = WhatsAppService(
