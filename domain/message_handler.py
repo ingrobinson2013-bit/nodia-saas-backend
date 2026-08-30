@@ -217,6 +217,7 @@ class MessageHandler:
                 citas_negocio=citas_negocio,
                 profesionales=profesionales,
                 sender_name=sender_name or "",
+                sender_wa_id=sender_wa_id or "",
             )
         else:
             system_prompt = build_system_prompt(
@@ -226,6 +227,7 @@ class MessageHandler:
                 citas_negocio=citas_negocio,
                 profesionales=profesionales,
                 sender_name=sender_name or "",
+                sender_wa_id=sender_wa_id or "",
             )
 
 

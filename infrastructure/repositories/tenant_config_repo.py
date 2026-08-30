@@ -1,7 +1,7 @@
 # infrastructure/repositories/tenant_config_repo.py
-# Acceso a datos de tenant_config — PostgreSQL Nativo & Clean Architecture
+# Acceso a datos de tenant_config — 100% PostgreSQL Nativo & Clean Architecture
 
-from typing import Optional
+from typing import Optional, Dict, Any
 import json
 import logging
 from infrastructure.database import fetch_one, execute_sql
@@ -20,15 +20,13 @@ class TenantConfigRepository:
         sql = "SELECT * FROM tenant_config WHERE tenant_id = %s LIMIT 1;"
         res = fetch_one(sql, (tenant_id,))
         if res:
+            config_data = res.get("config")
+            if isinstance(config_data, str):
+                try: config_data = json.loads(config_data)
+                except Exception: pass
+            if isinstance(config_data, dict):
+                return config_data
             return res
-        
-        db = get_supabase()
-        if db:
-            try:
-                result = db.table("tenant_config").select("*").eq("tenant_id", tenant_id).single().execute()
-                return result.data if result.data else None
-            except Exception:
-                pass
         return None
 
     def update_config(self, tenant_id: str, data: dict) -> bool:
@@ -40,14 +38,6 @@ class TenantConfigRepository:
         VALUES (%s, %s::jsonb, NOW())
         ON CONFLICT (tenant_id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();
         """
-        ok = execute_sql(sql, (tenant_id, config_json))
-        if not ok:
-            db = get_supabase()
-            if db:
-                try:
-                    db.table("tenant_config").update(data).eq("tenant_id", tenant_id).execute()
-                    return True
-                except Exception as e:
-                    logger.error(f"Error en update_config fallback: {e}")
-        return ok
+        return execute_sql(sql, (tenant_id, config_json))
+
 

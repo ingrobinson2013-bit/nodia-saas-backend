@@ -59,17 +59,19 @@ def _build_calendar_block(now_bogota: datetime, weekday_map: dict) -> tuple:
 
 def build_system_prompt(tenant: dict, tenant_config: dict,
                         citas_cliente: list = None, citas_negocio: list = None,
-                        profesionales: list = None, sender_name: str = "") -> str:
+                        profesionales: list = None, sender_name: str = "",
+                        sender_wa_id: str = "") -> str:
     """
     Genera el system prompt completo para VALE usando los datos del tenant.
 
     Args:
         tenant: Datos del tenant (nombre, tenant_id, etc.)
         tenant_config: Configuracion del negocio (direccion, horario, servicios, etc.)
-        citas_cliente: Lista de dicts {fecha_cita, hora_cita, servicio} de Supabase
-        citas_negocio: Lista de dicts {fecha_cita, hora_cita} de Supabase
+        citas_cliente: Lista de dicts {fecha_cita, hora_cita, servicio} de PostgreSQL
+        citas_negocio: Lista de dicts {fecha_cita, hora_cita} de PostgreSQL
         profesionales: Lista de profesionales disponibles con especialidades y horarios
         sender_name: Nombre identificado del cliente actual en WhatsApp
+        sender_wa_id: Número de WhatsApp del cliente para extracción de memoria híbrida
     """
     weekday_map = {0:'Lunes',1:'Martes',2:'Miercoles',3:'Jueves',4:'Viernes',5:'Sabado',6:'Domingo'}
     now_bogota = datetime.now(BOGOTA_TZ)
@@ -82,6 +84,14 @@ def build_system_prompt(tenant: dict, tenant_config: dict,
     negocio_direccion = tenant_config.get("direccion", "Consultar direccion con el negocio") if tenant_config else ""
     negocio_horario   = tenant_config.get("horario", "Lun-Sab 9am-8pm, Dom 10am-6pm") if tenant_config else ""
     negocio_servicios_raw = (tenant_config.get("servicios_texto", "") if tenant_config else "") or ""
+
+    # Memoria Híbrida del Cliente (Aprendizaje Continuo)
+    memoria_contexto = ""
+    try:
+        from domain.memory_engine import memory_engine
+        memoria_contexto = memory_engine.get_client_context(tenant_id, sender_wa_id)
+    except Exception as em:
+        logger.warning(f"Error inyectando memoria de cliente: {em}")
 
     # REGLA: Si hay profesionales de Odoo -> SIEMPRE usar su catalogo (fuente de verdad)
     # Si NO hay Odoo -> usar servicios_texto manual como fallback
@@ -103,12 +113,12 @@ def build_system_prompt(tenant: dict, tenant_config: dict,
         precios_ref = ""
     promo_texto = negocio_promo or "10% de descuento especial"
 
-    # Citas formateadas desde Supabase
+    # Citas formateadas desde PostgreSQL
     citas_cliente_texto = _format_citas_cliente(citas_cliente)
     citas_negocio_texto = _format_citas_negocio(citas_negocio)
 
     prompt = f"""Eres VALE, la recepcionista de confianza de {negocio_nombre}. Eres una mujer real que atiende por WhatsApp. Llevas anos trabajando con barberias y centros de belleza y sabes como hablar con los clientes de tu a tu.
-
+{memoria_contexto}
 REGLAS DE ORO DE EJECUCIÓN DE HERRAMIENTAS (TOOL CALLING) - CRÍTICO:
 - Cuando la lógica te indique llamar a una herramienta (ej: `get_my_appointments`, `check_availability`, `cancel_appointment`, `reschedule_appointment`, `create_appointment`), DEBES ejecutar la herramienta INMEDIATAMENTE en ese mismo turno.
 - NUNCA respondas con mensajes de espera o relleno en texto (como "un momento por favor", "déjame revisar tus citas", "voy a verificar") sin incluir y ejecutar la llamada a la herramienta correspondiente en esa misma respuesta. La llamada es obligatoria para que el sistema funcione.
@@ -327,10 +337,11 @@ def inject_dynamic_context(
     citas_negocio: list = None,
     profesionales: list = None,
     sender_name: str = "",
+    sender_wa_id: str = "",
 ) -> str:
     """
-    Toma el prompt personalizado del tenant (almacenado en Supabase)
-    e inyecta al final el bloque dinamico de fecha, calendario y citas.
+    Toma el prompt personalizado del tenant (almacenado en PostgreSQL)
+    e inyecta al final el bloque dinamico de fecha, calendario, memoria de cliente y citas.
     """
     weekday_map = {0:'Lunes',1:'Martes',2:'Miercoles',3:'Jueves',4:'Viernes',5:'Sabado',6:'Domingo'}
     now_bogota = datetime.now(BOGOTA_TZ)
@@ -342,8 +353,16 @@ def inject_dynamic_context(
     
     profesionales_texto = "\n".join(profesionales) if profesionales else "Cualquiera"
 
-    dynamic_block = f"""
+    # Memoria Híbrida del Cliente (Aprendizaje Continuo)
+    memoria_contexto = ""
+    try:
+        from domain.memory_engine import memory_engine
+        memoria_contexto = memory_engine.get_client_context(tenant_id, sender_wa_id)
+    except Exception as em:
+        logger.warning(f"Error inyectando memoria de cliente: {em}")
 
+    dynamic_block = f"""
+{memoria_contexto}
 CLIENTE ACTUAL:
 - El contacto de WhatsApp dice '{sender_name or 'No identificado'}'.
 - CRÍTICO DE NOMBRE (SOLICITUD OBLIGATORIA): ANTES de confirmar o crear cualquier cita, DEBES PREGUNTAR SIEMPRE el nombre real de la persona (ej: "¿A nombre de quién dejamos registrada la cita?" o "¿Me regalas tu nombre para registrar la cita?").

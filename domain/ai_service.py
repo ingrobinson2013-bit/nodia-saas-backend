@@ -728,6 +728,22 @@ class AIService:
                                         "fecha": fn_args.get("fecha", ""),
                                         "hora": fn_args.get("hora", ""),
                                     }
+                                    # 🧠 Consolidación de Aprendizaje Híbrido en client_memory
+                                    try:
+                                        from domain.memory_engine import memory_engine
+                                        memory_engine.learn_from_appointment(
+                                            tenant_id=tenant_id or "",
+                                            wa_from=sender_wa_id or "",
+                                            nombre=fn_args.get("cliente_nombre", sender_name or ""),
+                                            profesional=fn_args.get("profesional_nombre", ""),
+                                            servicio=fn_args.get("servicio", ""),
+                                            fecha=fecha_req,
+                                            hora=hora_req
+                                        )
+                                        logger.info(f"🧠 Memoria híbrida consolidada para {sender_wa_id}: {fn_args.get('profesional_nombre')} - {fn_args.get('servicio')}")
+                                    except Exception as me_err:
+                                        logger.warning(f"No se pudo actualizar la memoria del cliente: {me_err}")
+
                                     tool_result = json.dumps({
                                         "success": True,
                                         "event_id": event_id,
