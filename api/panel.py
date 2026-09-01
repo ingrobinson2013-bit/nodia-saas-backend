@@ -195,3 +195,88 @@ async def list_intent_logs(tenant_id: Optional[str] = None, limit: int = 50):
         """
         rows = fetch_all(sql, (limit,))
     return {"success": True, "logs": rows or []}
+
+
+# ── 6. Telemetría y ROI Global / Por Tenant (Exclusivo Admin) ──────────
+@router.get("/telemetry")
+async def get_telemetry_stats(tenant_id: Optional[str] = None):
+    """Retorna métricas agregadas de rendimiento de IA, Fast-Path, ahorro en USD y memoria."""
+    filter_sql = "WHERE tenant_id = %s" if tenant_id else ""
+    params = (tenant_id,) if tenant_id else ()
+
+    # 1. Conteo y métricas de intención
+    sql_totals = f"""
+    SELECT
+        COUNT(*) as total_logs,
+        COUNT(*) FILTER (WHERE motor_usado LIKE 'fastpath%%') as fastpath_count,
+        COUNT(*) FILTER (WHERE motor_usado NOT LIKE 'fastpath%%') as llm_count,
+        COALESCE(AVG(latencia_ms) FILTER (WHERE motor_usado LIKE 'fastpath%%'), 2.4) as avg_fastpath_ms,
+        COALESCE(AVG(latencia_ms) FILTER (WHERE motor_usado NOT LIKE 'fastpath%%'), 820.0) as avg_llm_ms
+    FROM ai_intent_logs
+    {filter_sql};
+    """
+    totals = fetch_one(sql_totals, params) or {}
+    total_logs = totals.get("total_logs", 0) or 0
+    fastpath_count = totals.get("fastpath_count", 0) or 0
+    llm_count = totals.get("llm_count", 0) or 0
+    avg_fastpath_ms = round(float(totals.get("avg_fastpath_ms", 2.4)), 1)
+    avg_llm_ms = round(float(totals.get("avg_llm_ms", 820.0)), 1)
+    
+    fastpath_ratio = round((fastpath_count / total_logs * 100), 1) if total_logs > 0 else 0.0
+    cost_saved_usd = round(fastpath_count * 0.00025, 4)  # Estimación basada en tokens ahorrados
+
+    # 2. Desglose por Intención
+    sql_breakdown = f"""
+    SELECT intencion_predicha, COUNT(*) as count
+    FROM ai_intent_logs
+    {filter_sql}
+    GROUP BY intencion_predicha
+    ORDER BY count DESC;
+    """
+    breakdown_rows = fetch_all(sql_breakdown, params) or []
+    breakdown = {r["intencion_predicha"]: r["count"] for r in breakdown_rows}
+
+    # 3. Clientes con Memoria Híbrida
+    sql_memory_count = f"SELECT COUNT(*) as count FROM client_memory {filter_sql};"
+    mem_total = fetch_one(sql_memory_count, params)
+    total_vip_clients = mem_total.get("count", 0) if mem_total else 0
+
+    # 4. Últimos 25 logs
+    sql_recent_logs = f"""
+    SELECT id, tenant_id, wa_from, mensaje_cliente, intencion_predicha,
+           confianza, motor_usado, latencia_ms, timestamp
+    FROM ai_intent_logs
+    {filter_sql}
+    ORDER BY id DESC
+    LIMIT 25;
+    """
+    recent_logs = fetch_all(sql_recent_logs, params) or []
+
+    # 5. Top clientes en memoria
+    sql_top_memory = f"""
+    SELECT id, tenant_id, wa_from, nombre_cliente, profesional_favorito,
+           servicios_frecuentes, dias_preferidos, horario_habitual,
+           total_citas_agendadas, ultima_cita_fecha, updated_at
+    FROM client_memory
+    {filter_sql}
+    ORDER BY total_citas_agendadas DESC, updated_at DESC
+    LIMIT 10;
+    """
+    top_memory = fetch_all(sql_top_memory, params) or []
+
+    return {
+        "success": True,
+        "metrics": {
+            "total_interactions": total_logs,
+            "fastpath_count": fastpath_count,
+            "llm_count": llm_count,
+            "fastpath_ratio": fastpath_ratio,
+            "avg_fastpath_ms": avg_fastpath_ms,
+            "avg_llm_ms": avg_llm_ms,
+            "cost_saved_usd": cost_saved_usd,
+            "total_vip_clients": total_vip_clients,
+            "breakdown": breakdown
+        },
+        "recent_logs": recent_logs,
+        "top_memory": top_memory
+    }
