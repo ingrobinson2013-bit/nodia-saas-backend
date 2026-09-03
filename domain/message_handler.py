@@ -256,27 +256,43 @@ class MessageHandler:
             response_text = self._fix_weekday_coherence(response_text)
             response_text = self._fix_military_time_to_12h(response_text)
 
-        if response_text and "servicio:" in response_text.lower() and "fecha:" in response_text.lower() and "hora:" in response_text.lower():
-            # -- 10c. Interceptar placeholders o nombres comerciales en el bloque de confirmación -----------
-            nombre_line = next((line for line in response_text.split("\n") if "nombre:" in line.lower()), "")
-            nombre_val = nombre_line.split(":", 1)[1].strip().lower() if ":" in nombre_line else ""
-            es_nombre_comercial = any(w in nombre_val for w in ["store", "sas", "tienda", "shop", "negocio", "co.", "beauty", "empresa", "no identificado", "cliente"])
-            
-            if "[" in response_text or es_nombre_comercial or not nombre_val:
-                if "[" in nombre_line or "tu nombre" in nombre_line or "nombre del cliente" in nombre_line or es_nombre_comercial or not nombre_val:
-                    response_text = "Antes de confirmar la cita, ¿me podrías regalar tu nombre completo para dejarla registrada a tu nombre? 😊"
-            
-            # Solo si no interceptamos por nombre, garantizamos la nota de 1h
-            if response_text and "Antes de confirmar la cita" not in response_text:
-                if "una hora antes" not in response_text.lower() and "1 hora antes" not in response_text.lower() and "reprogramar" not in response_text.lower():
-                    reminder_line = "*(Recuerda que si requieres reprogramar o cancelar tu cita, debes hacerlo al menos una hora antes)*"
-                    # Insertar antes de ¿Confirma? o Confirma?
-                    match_conf = re.search(r"(\n\s*¿?\s*confirma\??\s*👍?)", response_text, re.IGNORECASE)
-                    if match_conf:
-                        idx = match_conf.start()
-                        response_text = response_text[:idx] + "\n\n" + reminder_line + "\n" + response_text[idx:]
-                    else:
-                        response_text = response_text.rstrip() + "\n\n" + reminder_line
+        if response_text:
+            is_cancel_reschedule = any(
+                w in (message_text or "").lower() for w in ["cancelar", "anular", "eliminar", "no puedo ir", "no voy", "reprogramar", "reagendar", "cambiar cita"]
+            ) or any(
+                w in response_text.lower() for w in ["cancelar", "cancelada", "cancelación", "reprogramar", "reagendar", "deseas cancelar"]
+            )
+
+            is_booking_proposal = any(
+                w in response_text.lower() for w in ["le dejo así la cita", "confirma?", "¿confirma?", "confirma 👍", "resumen de tu cita", "dejo agendada"]
+            ) and "servicio:" in response_text.lower() and "fecha:" in response_text.lower() and "hora:" in response_text.lower()
+
+            if is_booking_proposal and not is_cancel_reschedule:
+                # -- 10c. Interceptar placeholders o nombres comerciales en el bloque de confirmación -----------
+                nombre_line = next((line for line in response_text.split("\n") if "nombre:" in line.lower()), "")
+                nombre_val = nombre_line.split(":", 1)[1].strip().lower() if ":" in nombre_line else ""
+                es_nombre_comercial = any(w in nombre_val for w in ["store", "sas", "tienda", "shop", "negocio", "co.", "beauty", "empresa", "no identificado", "cliente"])
+                
+                # Si tenemos sender_name válido del cliente y apareció un placeholder, inyectarlo automáticamente
+                if sender_name and sender_name.strip() and not any(w in sender_name.lower() for w in ["store", "sas", "tienda", "shop", "negocio", "co.", "beauty", "empresa"]):
+                    if "[" in response_text or es_nombre_comercial or not nombre_val:
+                        if "[" in nombre_line or "tu nombre" in nombre_line or "nombre del cliente" in nombre_line:
+                            response_text = response_text.replace(nombre_line, f"Nombre: {sender_name.strip()}")
+                elif "[" in response_text or es_nombre_comercial or not nombre_val:
+                    if "[" in nombre_line or "tu nombre" in nombre_line or "nombre del cliente" in nombre_line or es_nombre_comercial:
+                        response_text = "Antes de confirmar la cita, ¿me podrías regalar tu nombre completo para dejarla registrada a tu nombre? 😊"
+                
+                # Solo si no interceptamos por nombre, garantizamos la nota de 1h
+                if response_text and "Antes de confirmar la cita" not in response_text:
+                    if "una hora antes" not in response_text.lower() and "1 hora antes" not in response_text.lower() and "reprogramar" not in response_text.lower():
+                        reminder_line = "*(Recuerda que si requieres reprogramar o cancelar tu cita, debes hacerlo al menos una hora antes)*"
+                        # Insertar antes de ¿Confirma? o Confirma?
+                        match_conf = re.search(r"(\n\s*¿?\s*confirma\??\s*👍?)", response_text, re.IGNORECASE)
+                        if match_conf:
+                            idx = match_conf.start()
+                            response_text = response_text[:idx] + "\n\n" + reminder_line + "\n" + response_text[idx:]
+                        else:
+                            response_text = response_text.rstrip() + "\n\n" + reminder_line
 
 
 
