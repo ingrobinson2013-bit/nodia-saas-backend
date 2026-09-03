@@ -86,8 +86,6 @@ async def _process_tenant(tenant: dict):
     if not recent:
         return
 
-    db = get_supabase()
-
     # Filtrar los que ya fueron notificados (via tabla notificaciones_wa o descripcion)
     for ev in recent:
         event_id = ev.get("id")
